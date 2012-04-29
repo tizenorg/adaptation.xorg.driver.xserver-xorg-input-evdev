@@ -6,7 +6,7 @@ Group:      System/X Hardware Support
 License:    MIT
 URL:        http://www.x.org/
 Source0:    http://xorg.freedesktop.org/releases/individual/driver/xf86-input-evdev-%{version}.tar.gz
-Requires:   xorg-x11-server
+Requires:   xserver-xorg-core
 BuildRequires:  pkgconfig(xorg-server)
 BuildRequires:  pkgconfig(xkbfile)
 BuildRequires:  pkgconfig(xproto)
@@ -14,6 +14,7 @@ BuildRequires:  pkgconfig(inputproto)
 BuildRequires:  pkgconfig(xrandr)
 BuildRequires:  pkgconfig(randrproto)
 BuildRequires:  pkgconfig(xextproto)
+BuildRequires:  pkgconfig(xorg-macros)
 
 
 %description
