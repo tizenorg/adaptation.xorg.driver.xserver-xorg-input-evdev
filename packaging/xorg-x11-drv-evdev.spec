@@ -31,7 +31,7 @@ This package contains xorg evdev development files
 
 
 %prep
-%setup -q -n xf86-input-evdev-%{version}
+%setup -q -n %{name}-%{version}
 
 %build
 
