@@ -6,6 +6,7 @@ Group:      System/X Hardware Support
 License:    MIT
 URL:        http://www.x.org/
 Source0:    http://xorg.freedesktop.org/releases/individual/driver/xf86-input-evdev-%{version}.tar.gz
+Source1001: packaging/xorg-x11-drv-evdev.manifest 
 Requires:   xserver-xorg-core
 BuildRequires:  pkgconfig(xorg-server)
 BuildRequires:  pkgconfig(xkbfile)
@@ -34,6 +35,7 @@ This package contains xorg evdev development files
 %setup -q -n %{name}-%{version}
 
 %build
+cp %{SOURCE1001} .
 
 %reconfigure --disable-static
 make %{?jobs:-j%jobs}
@@ -45,10 +47,12 @@ rm -rf %{buildroot}
 %remove_docs
 
 %files
+%manifest xorg-x11-drv-evdev.manifest
 %defattr(-,root,root,-)
 %(pkg-config xorg-server --variable=moduledir )/input/evdev_drv.so
 
 %files devel
+%manifest xorg-x11-drv-evdev.manifest
 %defattr(-,root,root,-)
 %{_includedir}/xorg/evdev-properties.h
 %{_libdir}/pkgconfig/xorg-evdev.pc
