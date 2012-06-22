@@ -1,0 +1,17 @@
+* Fri Jun 22 2012 Anas Nashif <anas.nashif@intel.com> 32f7632
+- fixed tarball and package naming
+
+* Wed May 30 2012 Ryan Ware <ryan.r.ware@intel.com> 4d651ab
+- Add default Smack manifest for xorg-x11-drv-evdev.spec
+
+* Fri May 18 2012 Yang Lin <lin.a.yang@intel.com> 7206b9c
+- clean tarball setup path to facilitate hudson automation submission
+
+* Sun Apr 29 2012 Kim Kibum <kb0929.kim@samsung.com> fe19408
+- upload tizen1.0 source
+
+* Fri Jan 06 2012 Kibum Kim <kb0929.kim@samsung.com> 95e6f48
+- Git init
+[ Eunkyoung Kim ]
+- Initial empty repository
+
