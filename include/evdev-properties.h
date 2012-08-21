@@ -66,4 +66,9 @@
 /* BOOL */
 #define EVDEV_PROP_SWAP_AXES "Evdev Axes Swap"
 
+#ifdef _F_EVDEV_CONFINE_REGION_
+/* Confine region in which relative and absolute devices can be moved */
+#define EVDEV_PROP_CONFINE_REGION "Evdev Confine Region"
+#endif /* _F_EVDEV_CONFINE_REGION_ */
+
 #endif

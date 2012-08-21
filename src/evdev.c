@@ -45,6 +45,15 @@
 #include <xkbsrv.h>
 
 #include "evdev.h"
+#ifdef _F_EVDEV_CONFINE_REGION_
+#include <xorg/mipointrst.h>
+
+#define MIPOINTER(dev) \
+    ((!IsMaster(dev) && !dev->master) ? \
+        (miPointerPtr)dixLookupPrivate(&(dev)->devPrivates, miPointerPrivKey): \
+        (miPointerPtr)dixLookupPrivate(&(GetMaster(dev, MASTER_POINTER))->devPrivates, miPointerPrivKey))
+
+#endif /* _F_EVDEV_CONFINE_REGION_ */
 
 #ifdef HAVE_PROPERTIES
 #include <X11/Xatom.h>
@@ -93,6 +102,9 @@
 #define EVDEV_UNIGNORE_ABSOLUTE (1 << 9) /* explicitly unignore abs axes */
 #define EVDEV_UNIGNORE_RELATIVE (1 << 10) /* explicitly unignore rel axes */
 #define EVDEV_RESOLUTION (1 << 12) /* device looks like a multi-touch screen? */
+#ifdef _F_EVDEV_CONFINE_REGION_
+#define EVDEV_CONFINE_REGION	(1 << 13)
+#endif /* _F_EVDEV_CONFINE_REGION_ */
 
 #define MIN_KEYCODE 8
 #define GLYPHS_PER_KEY 2
@@ -127,8 +139,17 @@ static void EvdevInitButtonLabels(EvdevPtr pEvdev, int natoms, Atom *atoms);
 static void EvdevInitProperty(DeviceIntPtr dev);
 static int EvdevSetProperty(DeviceIntPtr dev, Atom atom,
                             XIPropertyValuePtr val, BOOL checkonly);
-static void EvdevSetMouseExist(int value);
-static void EvdevSetExtKeyboardExist(int value);
+#ifdef _F_EVDEV_CONFINE_REGION_
+Bool IsMaster(DeviceIntPtr dev);
+DeviceIntPtr GetPairedDevice(DeviceIntPtr dev);
+DeviceIntPtr GetMaster(DeviceIntPtr dev, int which);
+DeviceIntPtr GetMasterPointerFromId(int deviceid);
+static void EvdevHookPointerCursorLimits(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor, BoxPtr pHotBox, BoxPtr pTopLeftBox);
+static void EvdevHookPointerConstrainCursor (DeviceIntPtr pDev, ScreenPtr pScreen, BoxPtr pBox);
+static void EvdevSetCursorLimits(InputInfoPtr pInfo, int region[5], int isSet);
+static void EvdevSetConfineRegion(InputInfoPtr pInfo, int num_item, int region[5]);
+static Atom prop_confine_region = 0;
+#endif /* _F_EVDEV_CONFINE_REGION_ */
 static Atom prop_invert = 0;
 static Atom prop_reopen = 0;
 static Atom prop_calibration = 0;
@@ -142,7 +163,7 @@ static Atom prop_btn_label = 0;
  * cannot be used by evdev, leaving us with a space of 2 at the end. */
 static EvdevPtr evdev_devices[MAXDEVICES] = {NULL};
 
-static size_t CountBits(unsigned long *array, size_t nlongs)
+static size_t EvdevCountBits(unsigned long *array, size_t nlongs)
 {
     unsigned int i;
     size_t count = 0;
@@ -680,9 +701,8 @@ EvdevPostAbsoluteMotionEvents(InputInfoPtr pInfo, int *num_v, int *first_v,
      * initialized to 1 so devices that doesn't use this scheme still
      * just works.
      */
-    if (pEvdev->abs && pEvdev->tool) {
+    if (pEvdev->abs && pEvdev->tool)
         xf86PostMotionEventP(pInfo->dev, TRUE, *first_v, *num_v, v);
-    }
 }
 
 /**
@@ -1190,8 +1210,6 @@ EvdevAddKeyClass(DeviceIntPtr device)
 
 #endif
 
-    pInfo->flags |= XI86_KEYBOARD_CAPABLE;
-
     return Success;
 }
 
@@ -1209,7 +1227,7 @@ EvdevAddAbsClass(DeviceIntPtr device)
     if (!TestBit(EV_ABS, pEvdev->bitmask))
             return !Success;
 
-    num_axes = CountBits(pEvdev->abs_bitmask, NLONGS(ABS_MAX));
+    num_axes = EvdevCountBits(pEvdev->abs_bitmask, NLONGS(ABS_MAX));
     if (num_axes < 1)
         return !Success;
     pEvdev->num_vals = num_axes;
@@ -1247,7 +1265,7 @@ EvdevAddAbsClass(DeviceIntPtr device)
 #endif
                                    pEvdev->absinfo[axis].minimum,
                                    pEvdev->absinfo[axis].maximum,
-                                   10000, 0, 10000);
+                                   10000, 0, 10000, Absolute);
         xf86InitValuatorDefaults(device, axnum);
         pEvdev->old_vals[axnum] = -1;
     }
@@ -1256,22 +1274,6 @@ EvdevAddAbsClass(DeviceIntPtr device)
 
     if (!InitPtrFeedbackClassDeviceStruct(device, EvdevPtrCtrlProc))
         return !Success;
-
-    if ((TestBit(ABS_X, pEvdev->abs_bitmask) &&
-         TestBit(ABS_Y, pEvdev->abs_bitmask)) ||
-        (TestBit(ABS_RX, pEvdev->abs_bitmask) &&
-         TestBit(ABS_RY, pEvdev->abs_bitmask)) ||
-        (TestBit(ABS_HAT0X, pEvdev->abs_bitmask) &&
-         TestBit(ABS_HAT0Y, pEvdev->abs_bitmask)) ||
-        (TestBit(ABS_HAT1X, pEvdev->abs_bitmask) &&
-         TestBit(ABS_HAT1Y, pEvdev->abs_bitmask)) ||
-        (TestBit(ABS_HAT2X, pEvdev->abs_bitmask) &&
-         TestBit(ABS_HAT2Y, pEvdev->abs_bitmask)) ||
-        (TestBit(ABS_HAT3X, pEvdev->abs_bitmask) &&
-         TestBit(ABS_HAT3Y, pEvdev->abs_bitmask)) ||
-        (TestBit(ABS_TILT_X, pEvdev->abs_bitmask) &&
-         TestBit(ABS_TILT_Y, pEvdev->abs_bitmask)))
-        pInfo->flags |= XI86_POINTER_CAPABLE;
 
     return Success;
 }
@@ -1290,7 +1292,7 @@ EvdevAddRelClass(DeviceIntPtr device)
     if (!TestBit(EV_REL, pEvdev->bitmask))
         return !Success;
 
-    num_axes = CountBits(pEvdev->rel_bitmask, NLONGS(REL_MAX));
+    num_axes = EvdevCountBits(pEvdev->rel_bitmask, NLONGS(REL_MAX));
     if (num_axes < 1)
         return !Success;
 
@@ -1344,7 +1346,7 @@ EvdevAddRelClass(DeviceIntPtr device)
 #if GET_ABI_MAJOR(ABI_XINPUT_VERSION) >= 7
                 atoms[axnum],
 #endif
-                -1, -1, 1, 0, 1);
+                -1, -1, 1, 0, 1, Relative);
         xf86InitValuatorDefaults(device, axnum);
     }
 
@@ -1352,8 +1354,6 @@ EvdevAddRelClass(DeviceIntPtr device)
 
     if (!InitPtrFeedbackClassDeviceStruct(device, EvdevPtrCtrlProc))
         return !Success;
-
-    pInfo->flags |= XI86_POINTER_CAPABLE;
 
     return Success;
 }
@@ -1624,6 +1624,7 @@ EvdevProc(DeviceIntPtr device, int what)
 {
     InputInfoPtr pInfo;
     EvdevPtr pEvdev;
+    int region[4] = { 0, };
 
     pInfo = device->public.devicePrivate;
     pEvdev = pInfo->private;
@@ -1660,6 +1661,10 @@ EvdevProc(DeviceIntPtr device, int what)
 	break;
 
     case DEVICE_CLOSE:
+#ifdef _F_EVDEV_CONFINE_REGION_
+	if( pEvdev->confined_id )
+		EvdevSetConfineRegion(pInfo, 1, &region[0]);
+#endif//_F_EVDEV_CONFINE_REGION_
 	xf86Msg(X_INFO, "%s: Close\n", pInfo->name);
         if (pInfo->fd != -1) {
             close(pInfo->fd);
@@ -1972,8 +1977,6 @@ EvdevProbe(InputInfoPtr pInfo)
     }
 
     if (has_rel_axes || has_abs_axes || num_buttons) {
-        pInfo->flags |= XI86_POINTER_CAPABLE | XI86_SEND_DRAG_EVENTS |
-                        XI86_CONFIGURED;
 	if (pEvdev->flags & EVDEV_TOUCHPAD) {
 	    xf86Msg(X_INFO, "%s: Configuring as touchpad\n", pInfo->name);
 	    pInfo->type_name = XI_TOUCHPAD;
@@ -1995,24 +1998,15 @@ EvdevProbe(InputInfoPtr pInfo)
                     pInfo->name);
         } else {
             xf86Msg(X_INFO, "%s: Configuring as keyboard\n", pInfo->name);
-            pInfo->flags |= XI86_KEYBOARD_CAPABLE | XI86_CONFIGURED;
 	    pInfo->type_name = XI_KEYBOARD;
         }
     }
 
-    if (has_scroll && (pInfo->flags & XI86_CONFIGURED) &&
-        (pInfo->flags & XI86_POINTER_CAPABLE) == 0)
+    if (has_scroll)
     {
         xf86Msg(X_INFO, "%s: Adding scrollwheel support\n", pInfo->name);
-        pInfo->flags  |= XI86_POINTER_CAPABLE;
         pEvdev->flags |= EVDEV_BUTTON_EVENTS;
         pEvdev->flags |= EVDEV_RELATIVE_EVENTS;
-    }
-
-    if ((pInfo->flags & XI86_CONFIGURED) == 0) {
-        xf86Msg(X_WARNING, "%s: Don't know how to use device\n",
-		pInfo->name);
-        return 1;
     }
 
     return 0;
@@ -2038,41 +2032,243 @@ EvdevSetCalibration(InputInfoPtr pInfo, int num_calibration, int calibration[4])
     }
 }
 
-static InputInfoPtr
-EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
+#ifdef _F_EVDEV_CONFINE_REGION_
+DeviceIntPtr
+GetMasterPointerFromId(int deviceid)
+{
+	DeviceIntPtr pDev = inputInfo.devices;
+	while(pDev)
+	{
+		if( pDev->id == deviceid && pDev->master )
+		{
+			return pDev->master;
+		}
+		pDev = pDev->next;
+	}
+
+	return NULL;
+}
+
+Bool
+IsMaster(DeviceIntPtr dev)
+{
+    return dev->type == MASTER_POINTER || dev->type == MASTER_KEYBOARD;
+}
+
+DeviceIntPtr
+GetPairedDevice(DeviceIntPtr dev)
+{
+    if (!IsMaster(dev) && dev->master)
+        dev = dev->master;
+
+    return dev->spriteInfo->paired;
+}
+
+DeviceIntPtr
+GetMaster(DeviceIntPtr dev, int which)
+{
+    DeviceIntPtr master;
+
+    if (IsMaster(dev))
+        master = dev;
+    else
+        master = dev->master;
+
+    if (master)
+    {
+        if (which == MASTER_KEYBOARD)
+        {
+            if (master->type != MASTER_KEYBOARD)
+                master = GetPairedDevice(master);
+        } else
+        {
+            if (master->type != MASTER_POINTER)
+                master = GetPairedDevice(master);
+        }
+    }
+
+    return master;
+}
+
+static void
+EvdevHookPointerCursorLimits(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor,
+                      BoxPtr pHotBox, BoxPtr pTopLeftBox)
+{
+    *pTopLeftBox = *pHotBox;
+}
+
+static void
+EvdevHookPointerConstrainCursor (DeviceIntPtr pDev, ScreenPtr pScreen, BoxPtr pBox)
 {
     InputInfoPtr pInfo;
+    EvdevPtr pEvdev;
+
+    pInfo =  pDev->public.devicePrivate;
+    if(!pInfo || !pInfo->private) return;
+    pEvdev = pInfo->private;
+
+    miPointerPtr pPointer;
+    pPointer = MIPOINTER(pDev);
+
+    if( IsMaster(pDev) && GetMasterPointerFromId(pEvdev->confined_id) == pDev )
+    {
+	  if( pBox->x1 < pEvdev->pointer_confine_region.x1 )
+	  	pBox->x1 = pEvdev->pointer_confine_region.x1;
+	  if( pBox->y1 < pEvdev->pointer_confine_region.y1 )
+	  	pBox->y1 = pEvdev->pointer_confine_region.y1;
+	  if( pBox->x2 > pEvdev->pointer_confine_region.x2 )
+	  	pBox->x2 = pEvdev->pointer_confine_region.x2;
+	  if( pBox->y2 > pEvdev->pointer_confine_region.y2 )
+	  	pBox->y2 = pEvdev->pointer_confine_region.y2;
+    }
+
+    pPointer->limits = *pBox;
+    pPointer->confined = PointerConfinedToScreen(pDev);
+}
+
+static void
+EvdevSetCursorLimits(InputInfoPtr pInfo, int region[5], int isSet)
+{
+	EvdevPtr pEvdev = pInfo->private;
+	int v[2];
+	int x, y;
+
+	ScreenPtr pCursorScreen = NULL;
+
+	pCursorScreen = miPointerGetScreen(pInfo->dev);
+
+	if( !pCursorScreen )
+	{
+		xf86DrvMsg(-1, X_ERROR, "[X11][SetCursorLimits] Failed to get screen information for pointer !\n");
+		return;
+	}
+
+	if( isSet )
+	{
+		//Clip confine region with screen's width/height
+		if( region[0] < 0 )
+			region[0] = 0;
+		if( region[2] >= pCursorScreen->width )
+			region[2] = pCursorScreen->width - 1;
+		if( region [1] < 0 )
+			region[1] = 0;
+		if( region[3] >= pCursorScreen->height )
+			region[3] = pCursorScreen->height - 1;
+
+		pEvdev->pointer_confine_region.x1 = region[0];
+		pEvdev->pointer_confine_region.y1 = region[1];
+		pEvdev->pointer_confine_region.x2 = region[2];
+		pEvdev->pointer_confine_region.y2 = region[3];
+		pEvdev->confined_id = pInfo->dev->id;
+
+		pCursorScreen->ConstrainCursor(inputInfo.pointer, pCursorScreen, &pEvdev->pointer_confine_region);
+		xf86DrvMsg(-1, X_INFO, "[X11][SetCursorLimits] Constrain information for cursor was set to TOPLEFT(%d, %d) BOTTOMRIGHT(%d, %d) !\n",
+			region[0], region[1], region[2], region[3]);
+
+		if( pCursorScreen->ConstrainCursor != EvdevHookPointerCursorLimits &&
+			pCursorScreen->ConstrainCursor != EvdevHookPointerConstrainCursor)
+		{
+			//Backup original function pointer(s)
+			pEvdev->pOrgConstrainCursor = pCursorScreen->ConstrainCursor;
+			pEvdev->pOrgCursorLimits = pCursorScreen->CursorLimits;
+
+			//Overriding function pointer(s)
+			pCursorScreen->CursorLimits = EvdevHookPointerCursorLimits;
+			pCursorScreen->ConstrainCursor = EvdevHookPointerConstrainCursor;
+		}
+
+		//Skip pointer warp if region[4] is zero
+		if(!region[4])
+			return;
+
+		v[0] = region[0] + (int)((float)(region[2]-region[0])/2);
+		v[1] = region[1] + (int)((float)(region[3]-region[1])/2);
+
+		xf86PostMotionEventP(pInfo->dev, TRUE, REL_X, 2, v);
+		xf86DrvMsg(-1, X_INFO, "[X11][SetCursorLimits] Cursor was warped to (%d, %d) !\n", v[0], v[1]);
+		miPointerGetPosition(pInfo->dev, &x, &y);
+		xf86DrvMsg(-1, X_INFO, "[X11][SetCursorLimits] Cursor is located at (%d, %d) !\n", x, y);
+	}
+	else
+	{
+		pEvdev->pointer_confine_region.x1 = 0;
+		pEvdev->pointer_confine_region.y1 = 0;
+		pEvdev->pointer_confine_region.x2 = pCursorScreen->width - 1;
+		pEvdev->pointer_confine_region.y2 = pCursorScreen->height - 1;
+		pEvdev->confined_id = 0;
+
+		pCursorScreen->ConstrainCursor(inputInfo.pointer, pCursorScreen, &pEvdev->pointer_confine_region);
+		xf86DrvMsg(-1, X_INFO, "[X11][SetCursorLimits] Constrain information for cursor was restored ! TOPLEFT(%d, %d) BOTTOMRIGHT(%d, %d) !\n",
+			pEvdev->pointer_confine_region.x1, pEvdev->pointer_confine_region.y1,
+			pEvdev->pointer_confine_region.x2, pEvdev->pointer_confine_region.y2);
+
+		//Restore original function pointer(s)
+		pCursorScreen->CursorLimits = pEvdev->pOrgCursorLimits;
+		pCursorScreen->ConstrainCursor = pEvdev->pOrgConstrainCursor;
+	}
+}
+
+static void
+EvdevSetConfineRegion(InputInfoPtr pInfo, int num_item, int region[5])
+{
+	EvdevPtr pEvdev = pInfo->private;
+
+	if( num_item != 5 && num_item != 1 )
+		return;
+
+	if( num_item == 5 )
+	{
+		if ( (region[2]-region[0]>0) && (region[3]-region[1]>0) )
+	    	{
+			EvdevSetCursorLimits(pInfo, &region[0], 1);
+			xf86DrvMsg(-1, X_INFO, "[X11][SetConfineRegion] Confine region was set to TOPLEFT(%d, %d) BOTTOMRIGHT(%d, %d) pointerwarp=%d\n",
+				region[0], region[1], region[2], region[3], region[4]);
+			pEvdev->flags |= EVDEV_CONFINE_REGION;
+	    	}
+	}
+	else if( num_item == 1 )
+	{
+		if( !region[0] && (pEvdev->flags & EVDEV_CONFINE_REGION) )
+		{
+			EvdevSetCursorLimits(pInfo, &region[0], 0);
+			xf86DrvMsg(-1, X_INFO, "[X11][SetConfineRegion] Confine region was unset !\n");
+			pEvdev->flags &= ~EVDEV_CONFINE_REGION;
+		}
+	}
+}
+#endif /* _F_EVDEV_CONFINE_REGION_ */
+
+static int
+EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
+{
+    int rc = BadAlloc;
     const char *device, *str;
     int num_calibration = 0, calibration[4] = { 0, 0, 0, 0 };
     int num_resolution = 0, resolution[4] = { 0, 0, 0, 0 };
     EvdevPtr pEvdev;
 
-    if (!(pInfo = xf86AllocateInput(drv, 0)))
-	return NULL;
+	if(!pInfo)
+	{
+		ErrorF("[X11][EvdevPreInit] pInfo is NULL !\n");
+		goto error;
+	}
+
+	ErrorF("[X11][EvdevPreInit] pInfo is NOT NULL !\n");
 
     /* Initialise the InputInfoRec. */
-    pInfo->name = dev->identifier;
     pInfo->flags = 0;
     pInfo->type_name = "UNKNOWN";
     pInfo->device_control = EvdevProc;
     pInfo->read_input = EvdevReadInput;
-    pInfo->history_size = 0;
-    pInfo->control_proc = NULL;
-    pInfo->close_proc = NULL;
     pInfo->switch_mode = NULL;
-    pInfo->conversion_proc = NULL;
-    pInfo->reverse_conversion_proc = NULL;
     pInfo->dev = NULL;
-    pInfo->private_flags = 0;
-    pInfo->always_core_feedback = NULL;
-    pInfo->conf_idev = dev;
 
-    if (!(pEvdev = xcalloc(sizeof(EvdevRec), 1)))
-        return pInfo;
+    if (!(pEvdev = calloc(sizeof(EvdevRec), 1)))
+        goto error;
 
     pInfo->private = pEvdev;
 
-    xf86CollectInputOptions(pInfo, evdevDefaults, NULL);
+    xf86CollectInputOptions(pInfo, evdevDefaults);
     xf86ProcessCommonOptions(pInfo, pInfo->options);
 
     /*
@@ -2081,11 +2277,12 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
      */
     pEvdev->tool = 1;
 
-    device = xf86CheckStrOption(dev->commonOptions, "Device", NULL);
+    device = xf86CheckStrOption(pInfo->options, "Device", NULL);
     if (!device) {
         xf86Msg(X_ERROR, "%s: No device specified.\n", pInfo->name);
 	xf86DeleteInput(pInfo, 0);
-        return NULL;
+        rc = BadValue;
+        goto error;
     }
 
     pEvdev->device = device;
@@ -2098,7 +2295,8 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
     if (pInfo->fd < 0) {
         xf86Msg(X_ERROR, "Unable to open evdev device \"%s\".\n", device);
 	xf86DeleteInput(pInfo, 0);
-        return NULL;
+        rc = BadValue;
+        goto error;
     }
 
     /* Check major/minor of device node to avoid adding duplicate devices. */
@@ -2109,7 +2307,8 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
                 pInfo->name);
         close(pInfo->fd);
         xf86DeleteInput(pInfo, 0);
-        return NULL;
+        rc = BadValue;
+        goto error;
     }
 
     pEvdev->reopen_attempts = xf86SetIntOption(pInfo->options, "ReopenAttempts", 10);
@@ -2146,7 +2345,7 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
     /* Grabbing the event device stops in-kernel event forwarding. In other
        words, it disables rfkill and the "Macintosh mouse button emulation".
        Note that this needs a server that sets the console to RAW mode. */
-    pEvdev->grabDevice = xf86CheckBoolOption(dev->commonOptions, "GrabDevice", 0);
+    pEvdev->grabDevice = xf86CheckBoolOption(pInfo->options, "GrabDevice", 0);
 
     EvdevInitButtonMapping(pInfo);
 
@@ -2154,13 +2353,15 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
         EvdevProbe(pInfo)) {
 	close(pInfo->fd);
 	xf86DeleteInput(pInfo, 0);
-        return NULL;
+       rc = BadMatch;
+       goto error;
     }
 
 	if(pEvdev->flags & EVDEV_RESOLUTION)
 	{
 		EvdevSwapAxes(pEvdev);
 	}
+#ifdef _F_IGNORE_TSP_RESOLUTION_
 	else
 	{
 		pEvdev->absinfo[ABS_X].maximum = 0;
@@ -2168,6 +2369,7 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
 		pEvdev->absinfo[ABS_Y].maximum = 0;
 		pEvdev->absinfo[ABS_Y].minimum = 0;
 	}
+#endif//_F_IGNORE_TSP_RESOLUTION_
 
     EvdevAddDevice(pInfo);
 
@@ -2178,7 +2380,14 @@ EvdevPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
         EvdevDragLockPreInit(pInfo);
     }
 
-    return pInfo;
+    memset(&pEvdev->pointer_confine_region, 0, sizeof(pEvdev->pointer_confine_region));
+
+    return Success;
+
+error:
+    if (pInfo->fd >= 0)
+        close(pInfo->fd);
+    return rc;
 }
 
 _X_EXPORT InputDriverRec EVDEV = {
@@ -2526,6 +2735,9 @@ EvdevInitProperty(DeviceIntPtr dev)
     int          rc;
     BOOL         invert[2];
     char         reopen;
+#ifdef _F_EVDEV_CONFINE_REGION_
+    int region[4] = { 0, };
+#endif//_F_EVDEV_CONFINE_REGION_
 
     prop_reopen = MakeAtom(EVDEV_PROP_REOPEN, strlen(EVDEV_PROP_REOPEN),
             TRUE);
@@ -2606,6 +2818,16 @@ EvdevInitProperty(DeviceIntPtr dev)
             XISetDevicePropertyDeletable(dev, prop_btn_label, FALSE);
         }
 #endif /* HAVE_LABELS */
+
+#ifdef _F_EVDEV_CONFINE_REGION_
+        prop_confine_region = MakeAtom(EVDEV_PROP_CONFINE_REGION,
+                strlen(EVDEV_PROP_CONFINE_REGION), TRUE);
+        rc = XIChangeDeviceProperty(dev, prop_confine_region, XA_INTEGER,
+                    32, PropModeReplace, 4, region, FALSE);
+
+        if (rc != Success)
+            return;
+#endif /* _F_EVDEV_CONFINE_REGION_ */
     }
 
 }
@@ -2693,7 +2915,20 @@ EvdevSetProperty(DeviceIntPtr dev, Atom atom, XIPropertyValuePtr val,
 	 EvdevSwapAxes(pEvdev);
     } else if (atom == prop_axis_label || atom == prop_btn_label)
         return BadAccess; /* Axis/Button labels can't be changed */
+#ifdef _F_EVDEV_CONFINE_REGION_
+    else if (atom == prop_confine_region)
+    {
+        if (val->format != 32 || val->type != XA_INTEGER)
+            return BadMatch;
+        if (val->size != 1 && val->size != 5)
+            return BadMatch;
 
+        if (!checkonly)
+            EvdevSetConfineRegion(pInfo, val->size, val->data);
+    }
+#endif /* _F_EVDEV_CONFINE_REGION_ */
     return Success;
 }
 #endif
+
+ 

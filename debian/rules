@@ -9,7 +9,7 @@
 
 include debian/xsfbs/xsfbs.mk
 
-CFLAGS = -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_
+CFLAGS = -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_ -D_F_EVDEV_CONFINE_REGION_
 LDFLAGS += -Wl,--hash-style=both -Wl,--as-needed
 ifneq (,$(filter noopt,$(DEB_BUILD_OPTIONS)))
 	CFLAGS += -O0
@@ -28,7 +28,6 @@ ifeq ($(DEB_BUILD_GNU_TYPE), $(DEB_HOST_GNU_TYPE))
 	confflags += --build=$(DEB_HOST_GNU_TYPE)
 else
 	confflags += --build=$(DEB_HOST_GNU_TYPE) --host=$(DEB_HOST_GNU_TYPE)
-#	confflags += --build=$(DEB_BUILD_GNU_TYPE) --host=$(DEB_HOST_GNU_TYPE)
 endif
 
 # kbd_drv.a isn't phenomenally useful; kbd_drv.so more so

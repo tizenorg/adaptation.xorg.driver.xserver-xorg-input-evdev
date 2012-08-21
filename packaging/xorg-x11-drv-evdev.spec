@@ -1,20 +1,23 @@
-Name:       xorg-x11-drv-evdev
+#sbs-git:slp/pkgs/xorg/driver/xserver-xorg-input-evdev xserver-xorg-input-evdev 2.3.2 1bd95071427e460187b090bc5ff5a2d880fe156a
+Name:	xorg-x11-drv-evdev
 Summary:    Xorg X11 evdev input driver
-Version:    2.3.2
+Version: 2.3.2
 Release:    4
 Group:      System/X Hardware Support
 License:    MIT
 URL:        http://www.x.org/
-Source0:    http://xorg.freedesktop.org/releases/individual/driver/xf86-input-evdev-%{version}.tar.gz
-Requires:   xserver-xorg-core
-BuildRequires:  pkgconfig(xorg-server)
+Source0:    %{name}-%{version}.tar.gz
+#Requires:   xorg-server
+Requires:   xorg-x11-server-Xorg
+BuildRequires:  pkgconfig(xorg-macros)
+BuildRequires:  xorg-x11-server-devel
+#BuildRequires:  pkgconfig(xorg-server)
 BuildRequires:  pkgconfig(xkbfile)
 BuildRequires:  pkgconfig(xproto)
 BuildRequires:  pkgconfig(inputproto)
 BuildRequires:  pkgconfig(xrandr)
 BuildRequires:  pkgconfig(randrproto)
 BuildRequires:  pkgconfig(xextproto)
-BuildRequires:  pkgconfig(xorg-macros)
 
 
 %description
@@ -31,11 +34,11 @@ This package contains xorg evdev development files
 
 
 %prep
-%setup -q -n xf86-input-evdev-%{version}
+%setup -q
 
 %build
 
-%reconfigure --disable-static
+%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_ -D_F_EVDEV_CONFINE_REGION_"
 make %{?jobs:-j%jobs}
 
 %install

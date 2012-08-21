@@ -170,6 +170,14 @@ typedef struct {
     int reopen_left;     /* number of attempts left to re-open the device */
     OsTimerPtr reopen_timer;
 
+    //Backup pointer(s) for cursor
+    CursorLimitsProcPtr pOrgCursorLimits;
+    ConstrainCursorProcPtr pOrgConstrainCursor;
+
+    //Confining information
+    int confined_id;
+    BoxRec pointer_confine_region;
+
     /* Cached info from device. */
     char name[1024];
     unsigned long bitmask[NLONGS(EV_CNT)];
@@ -223,3 +231,4 @@ void EvdevWheelEmuInitProperty(DeviceIntPtr);
 void EvdevDragLockInitProperty(DeviceIntPtr);
 #endif
 #endif
+

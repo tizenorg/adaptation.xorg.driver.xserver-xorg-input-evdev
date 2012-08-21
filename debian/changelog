@@ -1,3 +1,64 @@
+xserver-xorg-input-evdev (2.3.2-5slp2+19) unstable; urgency=low
+
+  * Fix CFLAGS in .spec file (add omitted MACRO defininitions)
+  * Git: slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-5slp2+19
+
+ -- Sung-Jin Park <sj76.park@samsung.com>  Fri, 15 Jun 2012 14:29:27 +0900
+
+xserver-xorg-input-evdev (2.3.2-5slp2+18) unstable; urgency=low
+
+  * Modify pointer confine functions for to/not to warp pointer
+  * Git: slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-5slp2+18
+
+ -- Sung-Jin Park <sj76.park@samsung.com>  Wed, 13 Jun 2012 21:44:52 +0900
+
+xserver-xorg-input-evdev (2.3.2-5slp2+17) unstable; urgency=low
+
+  * do not install libtool files
+  * Git: slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-5slp2+17
+
+ -- SooChan Lim <sc1.lim@samsung.com>  Fri, 18 May 2012 09:28:50 +0900
+
+xserver-xorg-input-evdev (2.3.2-4slp2+17) unstable; urgency=low
+
+  * Change global variable(s) to member variable(s) of EvdevRec
+  * Remove old unused function(s)
+  * Replace xcalloc() with calloc() : xcalloc() is depricated.
+  * Replace variable(s) declaration at the front of each function
+  * Git: 165.213.180.234:slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-4slp2+17
+
+ -- Sung-Jin Park <sj76.park@samsung.com>  Sat, 12 May 2012 16:08:29 +0900
+
+xserver-xorg-input-evdev (2.3.2-4slp2+16) unstable; urgency=low
+
+  * Add overriding functions related to confining cursor
+    Add misc functions needed by confining function
+	Modify EvdevSetCursorLimits() for backingup/restoring function pointer(s)
+  * Git: 165.213.180.234:slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-4slp2+16
+
+ -- Sung-Jin Park <sj76.park@samsung.com>  Thu, 10 May 2012 19:06:36 +0900
+
+xserver-xorg-input-evdev (2.3.2-4slp2+15) unstable; urgency=low
+
+  * Add _F_IGNORE_TSP_RESOLUTION_ to ignore TSP range information
+  * Git: 165.213.180.234:slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-4slp2+15
+
+ -- Sung-Jin Park <sj76.park@samsung.com>  Tue, 17 Apr 2012 19:16:08 +0900
+
+xserver-xorg-input-evdev (2.3.2-4slp2+14) unstable; urgency=low
+
+  * Add a feature for confining input coordinates
+  * Git: 165.213.180.234:slp/pkgs/xorg/driver/xserver-xorg-input-evdev
+  * Tag: xserver-xorg-input-evdev_2.3.2-4slp2+14
+
+ -- Sung-Jin Park <sj76.park@samsung.com>  Thu, 29 Mar 2012 15:02:49 +0900
+
 xserver-xorg-input-evdev (2.3.2-4slp2+13) unstable; urgency=low
 
   * Remove log messages applied in previous version
@@ -32,7 +93,7 @@ xserver-xorg-input-evdev (2.3.2-4slp2+10) unstable; urgency=low
 
 xserver-xorg-input-evdev (2.3.2-4slp2+9) unstable; urgency=low
 
-  * [X11R7.6] upgrade package 
+  * [X11R7.6] upgrade package
   * Git: 165.213.180.234:slp/pkgs/xorg/driver/xserver-xorg-input-evdev
   * Tag: xserver-xorg-input-evdev_2.3.2-4slp2+9
 
@@ -94,7 +155,7 @@ xserver-xorg-input-evdev (2.3.2-4slp2+3) unstable; urgency=low
 
 xserver-xorg-input-evdev (2.3.2-4slp2+2) unstable; urgency=low
 
-  * Reupload for fixing the problem (ABI not matching with xorg-server) 
+  * Reupload for fixing the problem (ABI not matching with xorg-server)
   * Git: 165.213.180.234:/git/slp/pkgs/xorg/driver/xserver-xorg-input-evdev
   * Tag: xserver-xorg-input-evdev_2.3.2-4slp2+2
 
