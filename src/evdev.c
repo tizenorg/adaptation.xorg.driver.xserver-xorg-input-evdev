@@ -2253,8 +2253,6 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 		goto error;
 	}
 
-	ErrorF("[X11][EvdevPreInit] pInfo is NOT NULL !\n");
-
     /* Initialise the InputInfoRec. */
     pInfo->flags = 0;
     pInfo->type_name = "UNKNOWN";
