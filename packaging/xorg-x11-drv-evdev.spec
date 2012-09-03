@@ -18,6 +18,7 @@ BuildRequires:  pkgconfig(inputproto)
 BuildRequires:  pkgconfig(xrandr)
 BuildRequires:  pkgconfig(randrproto)
 BuildRequires:  pkgconfig(xextproto)
+BuildRequires:  pkgconfig(resourceproto)
 
 
 %description
