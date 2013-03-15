@@ -1,8 +1,8 @@
 #sbs-git:slp/pkgs/xorg/driver/xserver-xorg-input-evdev xserver-xorg-input-evdev 2.3.2 1bd95071427e460187b090bc5ff5a2d880fe156a
 Name:	xorg-x11-drv-evdev
 Summary:    Xorg X11 evdev input driver
-Version: 2.3.2
-Release:    4
+Version: 2.7.0
+Release:    3
 Group:      System/X Hardware Support
 License:    MIT
 URL:        http://www.x.org/
@@ -19,7 +19,10 @@ BuildRequires:  pkgconfig(xrandr)
 BuildRequires:  pkgconfig(randrproto)
 BuildRequires:  pkgconfig(xextproto)
 BuildRequires:  pkgconfig(resourceproto)
-
+BuildRequires:  pkgconfig(libudev)
+BuildRequires:  pkgconfig(mtdev)
+Requires:  libudev
+Requires:  mtdev
 
 %description
 The Xorg X11 evdev input driver
@@ -38,8 +41,8 @@ This package contains xorg evdev development files
 %setup -q
 
 %build
-
-%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_ -D_F_EVDEV_CONFINE_REGION_"
+%autogen
+%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_ -D_F_EVDEV_CONFINE_REGION_ -D_F_ENABLE_DEVICE_TYPE_PROP_ -D_F_GESTURE_EXTENSION_ -D_F_TOUCH_TRANSFORM_MATRIX_ "
 make %{?jobs:-j%jobs}
 
 %install
