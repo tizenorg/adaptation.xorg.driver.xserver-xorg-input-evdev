@@ -1,7 +1,7 @@
 #sbs-git:slp/pkgs/xorg/driver/xserver-xorg-input-evdev xserver-xorg-input-evdev 2.3.2 1bd95071427e460187b090bc5ff5a2d880fe156a
 Name:	xorg-x11-drv-evdev
 Summary:    Xorg X11 evdev input driver
-Version: 2.7.0
+Version: 2.7.1
 Release:    3
 Group:      System/X Hardware Support
 License:    MIT

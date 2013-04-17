@@ -1794,7 +1794,10 @@ EvdevAddButtonClass(DeviceIntPtr device)
 
     if (!InitButtonClassDeviceStruct(device, pEvdev->num_buttons, labels,
                                      pEvdev->btnmap))
+    {
+	 free(labels);
         return !Success;
+    }
 
     free(labels);
     return Success;
@@ -2793,7 +2796,7 @@ EvdevSetConfineRegion(InputInfoPtr pInfo, int num_item, int region[6])
 			pEvdev->flags |= EVDEV_CONFINE_REGION;
 	    	}
 	}
-	else if( num_item == 1 )
+	else//if( num_item == 1 )
 	{
 		xf86IDrvMsg(pInfo, X_INFO, "[X11][SetConfineRegion] num_item == 1\n");
 		if( !region[0] && (pEvdev->flags & EVDEV_CONFINE_REGION) )
@@ -2803,8 +2806,6 @@ EvdevSetConfineRegion(InputInfoPtr pInfo, int num_item, int region[6])
 			pEvdev->flags &= ~EVDEV_CONFINE_REGION;
 		}
 	}
-	else
-		xf86IDrvMsg(pInfo, X_INFO, "[X11][SetConfineRegion] num_item == %d\n", num_item);
 }
 #endif /* #ifdef _F_EVDEV_CONFINE_REGION_ */
 
