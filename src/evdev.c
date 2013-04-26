@@ -880,6 +880,13 @@ EvdevProcessAbsoluteMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
         pEvdev->abs_queued = 1;
     } else if (!pEvdev->mt_mask) {
         map = pEvdev->axis_map[ev->code];
+
+	if(map < 0)
+	{
+		xf86IDrvMsg(pInfo, X_INFO, "[EvdevProcessAbsoluteMotionEvent] Invalid valuator (=%d), value=%d\nThis is going to be skipped.", map, value);
+		return;
+	}
+
         valuator_mask_set(pEvdev->vals, map, value);
         pEvdev->abs_queued = 1;
     }
@@ -2526,15 +2533,6 @@ EvdevOpenDevice(InputInfoPtr pInfo)
         }
     }
 
-#ifdef MULTITOUCH
-    pEvdev->mtdev = mtdev_new_open(pInfo->fd);
-    if (pEvdev->mtdev)
-        pEvdev->cur_slot = pEvdev->mtdev->caps.slot.value;
-    else {
-        xf86Msg(X_ERROR, "%s: Couldn't open mtdev device\n", pInfo->name);
-        return FALSE;
-    }
-#endif
 
     /* Check major/minor of device node to avoid adding duplicate devices. */
     pEvdev->min_maj = EvdevGetMajorMinor(pInfo);
@@ -2930,6 +2928,27 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
         EvdevWheelEmuPreInit(pInfo);
         EvdevDragLockPreInit(pInfo);
     }
+
+#ifdef MULTITOUCH
+    if (strstr(pInfo->type_name, XI_TOUCHSCREEN))
+    {
+	pEvdev->mtdev = mtdev_new_open(pInfo->fd);
+
+	if (pEvdev->mtdev)
+	{
+		pEvdev->cur_slot = pEvdev->mtdev->caps.slot.value;
+	}
+	else
+	{
+		xf86Msg(X_ERROR, "%s: Couldn't open mtdev device\n", pInfo->name);
+		return FALSE;
+	}
+    }
+    else
+    {
+	pEvdev->mtdev = NULL;
+    }
+#endif
 
 #ifdef _F_TOUCH_TRANSFORM_MATRIX_
     pEvdev->use_transform = FALSE;

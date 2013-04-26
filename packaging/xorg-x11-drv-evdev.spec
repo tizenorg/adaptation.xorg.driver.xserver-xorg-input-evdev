@@ -42,7 +42,7 @@ This package contains xorg evdev development files
 
 %build
 %autogen
-%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_ -D_F_EVDEV_CONFINE_REGION_ -D_F_ENABLE_DEVICE_TYPE_PROP_ -D_F_GESTURE_EXTENSION_ -D_F_TOUCH_TRANSFORM_MATRIX_ "
+%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_EVDEV_CONFINE_REGION_ -D_F_ENABLE_DEVICE_TYPE_PROP_ -D_F_GESTURE_EXTENSION_ -D_F_TOUCH_TRANSFORM_MATRIX_ "
 make %{?jobs:-j%jobs}
 
 %install
