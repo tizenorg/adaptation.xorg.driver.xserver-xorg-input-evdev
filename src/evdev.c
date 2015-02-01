@@ -188,10 +188,56 @@ static Atom prop_relative_move_ack;
 static Atom prop_transform;
 #endif /* #ifdef _F_TOUCH_TRANSFORM_MATRIX_ */
 
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+static Atom prop_xkb_rules = None;
+#endif //_F_USE_DEFAULT_XKB_RULES_
+
 /* All devices the evdev driver has allocated and knows about.
  * MAXDEVICES is safe as null-terminated array, as two devices (VCP and VCK)
  * cannot be used by evdev, leaving us with a space of 2 at the end. */
 static EvdevPtr evdev_devices[MAXDEVICES] = {NULL};
+
+#ifdef _F_REMAP_KEYS_
+static uint16_t
+remapKey(EvdevPtr ev, uint16_t code)
+{
+    uint8_t slice=code/256;
+    uint8_t offs=code%256;
+
+    if (!ev->keyremap) return code;
+    if (!(ev->keyremap->sl[slice])) return code;
+    if (!(ev->keyremap->sl[slice]->cd[offs])) return code;
+    return ev->keyremap->sl[slice]->cd[offs];
+}
+
+static void
+addRemap(EvdevPtr ev,uint16_t code,uint8_t value)
+{
+    uint8_t slice=code/256;
+    uint8_t offs=code%256;
+
+    if (!ev->keyremap) {
+        ev->keyremap=(EvdevKeyRemapPtr)calloc(sizeof(EvdevKeyRemap),1);
+    }
+    if (!ev->keyremap->sl[slice]) {
+        ev->keyremap->sl[slice]=(EvdevKeyRemapSlice*)calloc(sizeof(EvdevKeyRemapSlice),1);
+     }
+     ev->keyremap->sl[slice]->cd[offs]=value;
+}
+
+static void
+freeRemap(EvdevPtr ev)
+{
+    uint16_t slice;
+    if (!ev->keyremap) return;
+    for (slice=0;slice<256;++slice) {
+        if (!ev->keyremap->sl[slice]) continue;
+        free(ev->keyremap->sl[slice]);
+    }
+    free(ev->keyremap);
+    ev->keyremap=0;
+}
+#endif //_F_REMAP_KEYS_
 
 static int EvdevSwitchMode(ClientPtr client, DeviceIntPtr device, int mode)
 {
@@ -358,7 +404,10 @@ EvdevDeviceIsVirtual(const char* devicenode)
     if (!udev)
         goto out;
 
-    stat(devicenode, &st);
+    if (stat(devicenode, &st) < 0) {
+        ErrorF("Failed to get (%s)'s status (stat)\n", devicenode);
+        goto out;
+    }
     device = udev_device_new_from_devnum(udev, 'c', st.st_rdev);
 
     if (!device)
@@ -385,6 +434,44 @@ static int wheel_left_button = 6;
 static int wheel_right_button = 7;
 #endif
 
+#ifdef _F_REMAP_KEYS_
+static void
+SetRemapOption(InputInfoPtr pInfo,const char* name)
+{
+    char *s,*c;
+    unsigned long int code,value;
+    int consumed;
+    EvdevPtr ev = pInfo->private;
+
+    s = xf86SetStrOption(pInfo->options, name, NULL);
+    if (!s) return;
+    if (!s[0]) {
+        free(s);
+        return;
+    }
+
+    c=s;
+    while (sscanf(c," %li = %li %n",&code,&value,&consumed) > 1) {
+        c+=consumed;
+        if (code < 0 || code > 65535L) {
+            xf86Msg(X_ERROR,"%s: input code %ld out of range for option \"event_key_remap\", ignoring.\n",pInfo->name,code);
+            continue;
+        }
+        if (value < MIN_KEYCODE || value > 255) {
+            xf86Msg(X_ERROR,"%s: output value %ld out of range for option \"event_key_remap\", ignoring.\n",pInfo->name,value);
+            continue;
+        }
+        xf86Msg(X_INFO,"%s: remapping %ld into %ld.\n",pInfo->name,code,value);
+        addRemap(ev,code,value-MIN_KEYCODE);
+    }
+
+    if (*c!='\0') {
+        xf86Msg(X_ERROR, "%s: invalid input for option \"event_key_remap\" starting at '%s', ignoring.\n",
+                pInfo->name, c);
+    }
+}
+#endif //_F_REMAP_KEYS_
+
 static EventQueuePtr
 EvdevNextInQueue(InputInfoPtr pInfo)
 {
@@ -403,7 +490,11 @@ EvdevNextInQueue(InputInfoPtr pInfo)
 void
 EvdevQueueKbdEvent(InputInfoPtr pInfo, struct input_event *ev, int value)
 {
+#ifdef _F_REMAP_KEYS_
+    int code = remapKey((EvdevPtr)(pInfo->private),ev->code) + MIN_KEYCODE;
+#else //_F_REMAP_KEYS_
     int code = ev->code + MIN_KEYCODE;
+#endif //_F_REMAP_KEYS_
     EventQueuePtr pQueue;
 
     /* Filter all repeated events from device.
@@ -481,6 +572,390 @@ EvdevQueueButtonClicks(InputInfoPtr pInfo, int button, int count)
         EvdevQueueButtonEvent(pInfo, button, 0);
     }
 }
+
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+static void
+EvdevMappingGamepadAbsToKey(InputInfoPtr pInfo,  struct input_event *ev)
+{
+    EvdevPtr pEvdev = pInfo->private;
+
+    if (pEvdev->support_directional_key == FALSE)
+        return;
+
+    if (ev->type != EV_ABS)
+    {
+        ErrorF("[EvdevMappingGamepadAbsToKey] Invalid evtype(%d)\n", ev->type);
+        return;
+    }
+
+    if (ev->code == ABS_HAT0X)
+    {
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = KEY_RIGHT;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_hatx = 1;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            case -1:
+                ev->type = EV_KEY;
+                ev->code = KEY_LEFT;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_hatx = -1;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = ( (pEvdev->pre_hatx == 1)? KEY_RIGHT : KEY_LEFT);
+                ev->value = EVDEV_RELEASE;
+                pEvdev->pre_hatx = 0;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadAbsToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == ABS_HAT0Y)
+    {
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = KEY_DOWN;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_haty = 1;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            case -1:
+                ev->type = EV_KEY;
+                ev->code = KEY_UP;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_haty = -1;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = ( (pEvdev->pre_haty == 1)? KEY_DOWN : KEY_UP);
+                ev->value = EVDEV_RELEASE;
+                pEvdev->pre_haty = 0;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadAbsToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == ABS_X)
+    {
+        switch(ev->value)
+        {
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = KEY_LEFT;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_x = 0;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            case 1 ... 254:
+                if( pEvdev->pre_x == 255 || pEvdev->pre_x == 0 )
+                {
+                    ev->type = EV_KEY;
+                    ev->code = ( (pEvdev->pre_x == 255)? KEY_RIGHT : KEY_LEFT);
+                    ev->value = EVDEV_RELEASE;
+                    pEvdev->pre_x = 128;
+                    EvdevProcessEvent(pInfo, ev);
+                }
+                break;
+            case 255:
+                ev->type = EV_KEY;
+                ev->code = KEY_RIGHT;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_x = 255;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadAbsToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == ABS_Y)
+    {
+        switch(ev->value)
+        {
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = KEY_UP;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_y = 0;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            case 1 ... 254:
+                if( pEvdev->pre_y == 255 || pEvdev->pre_y == 0 )
+                {
+                    ev->type = EV_KEY;
+                    ev->code = ( (pEvdev->pre_y == 255)? KEY_DOWN : KEY_UP);
+                    ev->value = EVDEV_RELEASE;
+                    pEvdev->pre_y = 128;
+                    EvdevProcessEvent(pInfo, ev);
+                }
+                break;
+            case 255:
+                ev->type = EV_KEY;
+                ev->code = KEY_DOWN;
+                ev->value = EVDEV_PRESS;
+                pEvdev->pre_y = 255;
+                EvdevProcessEvent(pInfo, ev);
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadAbsToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+}
+
+static void
+EvdevMappingGamepadKeyToKey(InputInfoPtr pInfo,  struct input_event *ev)
+{
+    EvdevPtr pEvdev = pInfo->private;
+    if(ev->type != EV_KEY)
+    {
+        ErrorF("[EvdevMappingGamepadKeyToKey] Invalid type (%d)\n", ev->type);
+        return;
+    }
+    if(ev->code == BTN_A)
+    {
+        if (pEvdev->keycode_btnA == 0)
+        {
+            ev->code = pEvdev->keycode_btnA;
+            return;
+        }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnA;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnA;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_B)
+    {
+        if (pEvdev->keycode_btnB == 0)
+        {
+            ev->code = pEvdev->keycode_btnB;
+            return;
+        }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnB;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnB;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_SELECT)
+    {
+        if (pEvdev->keycode_btnSelect == 0)
+        {
+            ev->code = pEvdev->keycode_btnSelect;
+            return;
+        }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnSelect;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnSelect;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_START)
+    {
+        if (pEvdev->keycode_btnStart == 0)
+        {
+            ev->code = pEvdev->keycode_btnStart;
+            return;
+        }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnStart;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnStart;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == 319)
+    {
+        if (pEvdev->keycode_btnPlay== 0)
+        {
+            ev->code = pEvdev->keycode_btnPlay;
+            return;
+        }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnPlay;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnPlay;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_X)
+    {
+       if (pEvdev->keycode_btnX == 0)
+      {
+          ev->code = pEvdev->keycode_btnX;
+          return;
+      }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnX;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnX;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_Y)
+    {
+        if (pEvdev->keycode_btnY == 0)
+       {
+          ev->code = pEvdev->keycode_btnY;
+          return;
+       }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnY;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnY;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_TL)
+    {
+        if (pEvdev->keycode_btnTL== 0)
+       {
+          ev->code = pEvdev->keycode_btnTL;
+          return;
+       }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnTL;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnTL;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+    else if(ev->code == BTN_TR)
+    {
+        if (pEvdev->keycode_btnTR == 0)
+        {
+            ev->code = pEvdev->keycode_btnTR;
+            return;
+        }
+        switch(ev->value)
+        {
+            case 1:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnTR;
+                ev->value = EVDEV_PRESS;
+                break;
+            case 0:
+                ev->type = EV_KEY;
+                ev->code = pEvdev->keycode_btnTR;
+                ev->value = EVDEV_RELEASE;
+                break;
+            default:
+                ErrorF("[EvdevMappingGamepadKeyToKey] Invalid value\n");
+                return;
+                break;
+        }
+    }
+}
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
 
 /**
  * Take the valuators and process them accordingly.
@@ -872,6 +1347,13 @@ EvdevProcessAbsoluteMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
 
     /* Get the signed value, earlier kernels had this as unsigned */
     value = ev->value;
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    if(pEvdev->flags & EVDEV_GAMEPAD)
+    {
+      EvdevMappingGamepadAbsToKey(pInfo, ev);
+      return;
+    }
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
 
     /* Ignore EV_ABS events if we never set up for them. */
     if (!(pEvdev->flags & EVDEV_ABSOLUTE_EVENTS))
@@ -916,6 +1398,16 @@ EvdevProcessKeyEvent(InputInfoPtr pInfo, struct input_event *ev)
     if (ev->code >= BTN_MOUSE && ev->code < KEY_OK)
         if (value == 2)
             return;
+
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    if(pEvdev->flags & EVDEV_GAMEPAD)
+    {
+        EvdevMappingGamepadKeyToKey(pInfo, ev);
+        if (ev->code == 0)
+            return;
+    }
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
+
 
     for (i = 0; i < ArrayLength(proximity_bits); i++)
     {
@@ -1027,6 +1519,28 @@ static void EvdevMTSync(InputInfoPtr pInfo, MTSyncType sync)
 }
 #endif /* #ifdef _F_GESTURE_EXTENSION_ */
 
+static void
+EvdevBlockHandler(pointer data, OSTimePtr pTimeout, pointer pRead)
+{
+    InputInfoPtr pInfo = (InputInfoPtr)data;
+    EvdevPtr pEvdev = pInfo->private;
+
+    RemoveBlockAndWakeupHandlers(EvdevBlockHandler,
+                                 (WakeupHandlerProcPtr)NoopDDA,
+                                 data);
+    pEvdev->block_handler_registered = FALSE;
+    ErrorF("Block Handler Called, [%d]pEvdev->rel_move_status %d, pEvdev->rel_move_status_ack %d\n", pInfo->dev->id, pEvdev->rel_move_status, pEvdev->rel_move_ack);
+
+
+    int rc = XIChangeDeviceProperty(pInfo->dev, prop_relative_move_status, XA_INTEGER, 8,
+				PropModeReplace, 1, &pEvdev->rel_move_status, TRUE);
+
+    if (rc != Success)
+    {
+        xf86IDrvMsg(pInfo, X_ERROR, "[%s] Failed to change device property (id:%d, prop=%d)\n", __FUNCTION__, pInfo->dev->id, prop_relative_move_status);
+    }
+}
+
 /**
  * Post the relative motion events.
  */
@@ -1041,16 +1555,11 @@ EvdevPostRelativeMotionEvents(InputInfoPtr pInfo, int num_v, int first_v,
 	if(!pEvdev->rel_move_prop_set)
 		pEvdev->rel_move_prop_set = 1;
 
-	if(!pEvdev->rel_move_status || !pEvdev->rel_move_ack)
+	if((!pEvdev->block_handler_registered) && (!pEvdev->rel_move_status || !pEvdev->rel_move_ack))
 	{
 		pEvdev->rel_move_status = 1;
-		int rc = XIChangeDeviceProperty(pInfo->dev, prop_relative_move_status, XA_INTEGER, 8,
-				PropModeReplace, 1, &pEvdev->rel_move_status, TRUE);
-		
-		if (rc != Success)
-		{
-			xf86IDrvMsg(pInfo, X_ERROR, "[%s] Failed to change device property (id:%d, prop=%d)\n", __FUNCTION__, pInfo->dev->id, prop_relative_move_status);
-		}
+		pEvdev->block_handler_registered = TRUE;
+		RegisterBlockAndWakeupHandlers(EvdevBlockHandler ,(WakeupHandlerProcPtr) NoopDDA, pInfo);
 	}
 
 	TimerCancel(pEvdev->rel_move_timer);
@@ -1396,6 +1905,44 @@ EvdevKbdCtrl(DeviceIntPtr device, KeybdCtrl *ctrl)
     write(pInfo->fd, ev, sizeof ev);
 }
 
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+void
+EvdevGetXkbRules(DeviceIntPtr device, XkbRMLVOSet * rmlvo)
+{
+    WindowPtr root=NULL;
+    PropertyPtr pProp;
+    int rc=0;
+    char * keymap;
+    if(screenInfo.numScreens > 0 && screenInfo.screens[0])
+    {
+        root = screenInfo.screens[0]->root;
+    }
+    else
+        return;
+
+    if( prop_xkb_rules == None )
+        prop_xkb_rules = MakeAtom("_XKB_RULES_NAMES", strlen("_XKB_RULES_NAMES"), TRUE);
+
+    rc = dixLookupProperty (&pProp, root, prop_xkb_rules, serverClient, DixReadAccess);
+    if (rc == Success && pProp->data){
+        keymap = (char *)pProp->data;
+        rmlvo->rules = keymap;
+        keymap = keymap+strlen(keymap)+1;
+        rmlvo->model = keymap;
+        keymap = keymap+strlen(keymap)+1;
+        rmlvo->layout = keymap;
+        keymap = keymap+strlen(keymap)+1;
+        rmlvo->variant = keymap;
+        keymap = keymap+strlen(keymap)+1;
+        rmlvo->options = keymap;
+    }
+    else
+    {
+        XkbGetRulesDflts(rmlvo);
+    }
+}
+#endif //_F_USE_DEFAULT_XKB_RULES_
+
 static int
 EvdevAddKeyClass(DeviceIntPtr device)
 {
@@ -1405,6 +1952,30 @@ EvdevAddKeyClass(DeviceIntPtr device)
     pInfo = device->public.devicePrivate;
     pEvdev = pInfo->private;
 
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+    XkbRMLVOSet dflts = { NULL };
+
+    if (pEvdev->use_default_xkb_rmlvo)
+    {
+        EvdevGetXkbRules(device, &dflts);
+
+        pEvdev->rmlvo.rules = (dflts.rules) ? strdup(dflts.rules) : NULL;
+        pEvdev->rmlvo.model = (dflts.model) ? strdup(dflts.model) : NULL;
+        pEvdev->rmlvo.layout = (dflts.layout) ? strdup(dflts.layout) : NULL;
+        pEvdev->rmlvo.variant = (dflts.variant) ? strdup(dflts.variant) : NULL;
+        pEvdev->rmlvo.options = (dflts.options) ? strdup(dflts.options) : NULL;
+
+        ErrorF("[%s] Set default XKB RMLVO !\n", __FUNCTION__);
+
+        ErrorF("[%s] pEvdev->rmlvo.rules=%s\n", __FUNCTION__, pEvdev->rmlvo.rules ? pEvdev->rmlvo.rules : "NULL");
+        ErrorF("[%s] pEvdev->rmlvo.model=%s\n", __FUNCTION__, pEvdev->rmlvo.model ? pEvdev->rmlvo.model : "NULL");
+        ErrorF("[%s] pEvdev->rmlvo.layout=%s\n", __FUNCTION__, pEvdev->rmlvo.layout ? pEvdev->rmlvo.layout : "NULL");
+        ErrorF("[%s] pEvdev->rmlvo.variant=%s\n", __FUNCTION__, pEvdev->rmlvo.variant ? pEvdev->rmlvo.variant : "NULL");
+        ErrorF("[%s] pEvdev->rmlvo.options=%s\n", __FUNCTION__, pEvdev->rmlvo.options ? pEvdev->rmlvo.options : "NULL");
+    }
+    else
+    {
+#endif
     /* sorry, no rules change allowed for you */
     xf86ReplaceStrOption(pInfo->options, "xkb_rules", "evdev");
     SetXkbOption(pInfo, "xkb_rules", &pEvdev->rmlvo.rules);
@@ -1420,9 +1991,16 @@ EvdevAddKeyClass(DeviceIntPtr device)
     SetXkbOption(pInfo, "xkb_options", &pEvdev->rmlvo.options);
     if (!pEvdev->rmlvo.options)
         SetXkbOption(pInfo, "XkbOptions", &pEvdev->rmlvo.options);
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+    }
+#endif
 
     if (!InitKeyboardDeviceStruct(device, &pEvdev->rmlvo, NULL, EvdevKbdCtrl))
         return !Success;
+
+#ifdef _F_REMAP_KEYS_
+    SetRemapOption(pInfo,"event_key_remap");
+#endif //_F_REMAP_KEYS_
 
     return Success;
 }
@@ -1473,7 +2051,7 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device)
     int num_mt_axes = 0, /* number of MT-only axes */
         num_mt_axes_total = 0; /* total number of MT axes, including
                                   double-counted ones, excluding blacklisted */
-    Atom *atoms;
+    Atom *atoms = NULL;
 
     pInfo = device->public.devicePrivate;
     pEvdev = pInfo->private;
@@ -1614,7 +2192,7 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device)
         int mode = pEvdev->flags & EVDEV_TOUCHPAD ?
             XIDependentTouch : XIDirectTouch;
 
-        if (pEvdev->mtdev->caps.slot.maximum > 0)
+        if (pEvdev->mtdev && pEvdev->mtdev->caps.slot.maximum > 0)
             num_touches = pEvdev->mtdev->caps.slot.maximum;
 
         if (!InitTouchClassDeviceStruct(device, num_touches, mode,
@@ -1740,6 +2318,8 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device)
 
 out:
     EvdevFreeMasks(pEvdev);
+    if (atoms)
+        free(atoms);
     return !Success;
 }
 
@@ -1749,7 +2329,7 @@ EvdevAddRelValuatorClass(DeviceIntPtr device)
     InputInfoPtr pInfo;
     EvdevPtr pEvdev;
     int num_axes, axis, i = 0;
-    Atom *atoms;
+    Atom *atoms = NULL;
 
     pInfo = device->public.devicePrivate;
     pEvdev = pInfo->private;
@@ -1841,6 +2421,8 @@ EvdevAddRelValuatorClass(DeviceIntPtr device)
 
 out:
     valuator_mask_free(&pEvdev->vals);
+    if (atoms)
+        free(atoms);
     return !Success;
 }
 
@@ -1951,9 +2533,17 @@ EvdevInitRelValuators(DeviceIntPtr device, EvdevPtr pEvdev)
 {
     InputInfoPtr pInfo = device->public.devicePrivate;
     int has_abs_axes = pEvdev->flags & EVDEV_ABSOLUTE_EVENTS;
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    if ( (pEvdev->flags & EVDEV_GAMEPAD) && (has_abs_axes) ) {
+        xf86IDrvMsg(pInfo, X_INFO,"initialized for game pad axes. Ignore relative axes.\n");
 
+        pEvdev->flags &= ~EVDEV_RELATIVE_EVENTS;
+
+        EvdevInitAbsValuators(device, pEvdev);
+    } else if (EvdevAddRelValuatorClass(device) == Success) {
+#else
     if (EvdevAddRelValuatorClass(device) == Success) {
-
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
         xf86IDrvMsg(pInfo, X_INFO,"initialized for relative axes.\n");
 
         if (has_abs_axes) {
@@ -1984,6 +2574,43 @@ EvdevInitTouchDevice(DeviceIntPtr device, EvdevPtr pEvdev)
 
     EvdevInitAbsValuators(device, pEvdev);
 }
+
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+static int
+EvdevIsGamePad(InputInfoPtr pInfo)
+{
+    int i;
+    EvdevPtr pEvdev = pInfo->private;
+    int result = 1;
+
+    for(i=0; i<MAX_GAMEPAD_DEFINITION_ABS; i++)
+    {
+        if(pEvdev->abs_gamepad_labels[i] == 0)
+            break;
+
+        if(!EvdevBitIsSet(pEvdev->abs_bitmask, pEvdev->abs_gamepad_labels[i]))
+        {
+            ErrorF("[EvdevIsGamePad] %s device doesn't support abs code(%d)\n", pInfo->name, pEvdev->abs_gamepad_labels[i]);
+            result = 0;
+            return result;
+        }
+    }
+
+    for(i=0; i<MAX_GAMEPAD_DEFINITION_KEY; i++)
+    {
+        if(pEvdev->key_gamepad_labels[i] == 0)
+            break;
+
+        if(!EvdevBitIsSet(pEvdev->key_bitmask, pEvdev->key_gamepad_labels[i]))
+        {
+            ErrorF("[EvdevIsGamePad] %s device doesn't support key code(%d)\n", pInfo->name, pEvdev->key_gamepad_labels[i]);
+            result = 0;
+            return result;
+        }
+    }
+    return result;
+}
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
 
 static int
 EvdevInit(DeviceIntPtr device)
@@ -2139,6 +2766,9 @@ EvdevProc(DeviceIntPtr device, int what)
         }
         EvdevFreeMasks(pEvdev);
         EvdevRemoveDevice(pInfo);
+#ifdef _F_REMAP_KEYS_
+        freeRemap(pEvdev);
+#endif //_F_REMAP_KEYS_
         pEvdev->min_maj = 0;
 	break;
 
@@ -2355,7 +2985,11 @@ EvdevProbe(InputInfoPtr pInfo)
     num_buttons = 0;
 
     /* count all buttons */
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    for (i = BTN_MISC; i < BTN_THUMBR; i++)
+#else
     for (i = BTN_MISC; i < BTN_JOYSTICK; i++)
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
     {
         int mapping = 0;
         if (EvdevBitIsSet(pEvdev->key_bitmask, i))
@@ -2471,6 +3105,11 @@ EvdevProbe(InputInfoPtr pInfo)
                     xf86IDrvMsg(pInfo, X_PROBED, "Found absolute touchscreen\n");
                     pEvdev->flags |= EVDEV_TOUCHSCREEN;
                     pEvdev->flags |= EVDEV_BUTTON_EVENTS;
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+            }  else if(EvdevIsGamePad(pInfo)) {
+                    xf86IDrvMsg(pInfo, X_PROBED, "Found gamepad\n");
+                    pEvdev->flags |= EVDEV_GAMEPAD;
+#endif // _F_EVDEV_SUPPORT_GAMEPAD
             }
         } else {
 #ifdef MULTITOUCH
@@ -2693,11 +3332,11 @@ EvdevHookPointerConstrainCursor (DeviceIntPtr pDev, ScreenPtr pScreen, BoxPtr pB
     EvdevPtr pEvdev;
     BoxPtr pConfineBox;
 
-    xf86IDrvMsg(pInfo, X_INFO, "[X11][EvdevHookPointerConstrainCursor] Enter !\n");
-
     pInfo =  pDev->public.devicePrivate;
     if(!pInfo || !pInfo->private) return;
     pEvdev = pInfo->private;
+
+    xf86IDrvMsg(pInfo, X_INFO, "[X11][EvdevHookPointerConstrainCursor] Enter !\n");
 
     miPointerPtr pPointer;
     pPointer = MIPOINTER(pDev);
@@ -2985,6 +3624,41 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 
     EvdevInitButtonMapping(pInfo);
 
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    {
+        int i;
+        char tmp[25];
+
+        memset(&pEvdev->abs_gamepad_labels, 0, sizeof(pEvdev->abs_gamepad_labels));
+
+        for(i = 0 ; i < MAX_GAMEPAD_DEFINITION_ABS ; i++)
+        {
+            snprintf(tmp, sizeof(tmp), "GamePad_Condition_ABS%d", i+1);
+            pEvdev->abs_gamepad_labels[i] = xf86SetIntOption(pInfo->options, tmp, 0);
+        }
+    }
+
+    {
+        int i;
+        char tmp[25];
+
+        memset(&pEvdev->key_gamepad_labels, 0, sizeof(pEvdev->key_gamepad_labels));
+
+        for(i = 0 ; i < MAX_GAMEPAD_DEFINITION_KEY ; i++)
+        {
+            snprintf(tmp, sizeof(tmp), "GamePad_Condition_KEY%d", i+1);
+            if(i == 0)
+                pEvdev->key_gamepad_labels[i] = xf86SetIntOption(pInfo->options, tmp, BTN_GAMEPAD);
+            else
+                pEvdev->key_gamepad_labels[i] = xf86SetIntOption(pInfo->options, tmp, 0);
+        }
+    }
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
+
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+    pEvdev->use_default_xkb_rmlvo = xf86SetBoolOption(pInfo->options, "UseDefaultXkbRMLVO", FALSE);
+#endif
+
     if (EvdevCache(pInfo) || EvdevProbe(pInfo)) {
         rc = BadMatch;
         goto error;
@@ -3094,6 +3768,22 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 	    memset(pEvdev->mt_status, 0, alloc_size);
     }
 #endif /* #ifdef _F_GESTURE_EXTENSION_ */
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    pEvdev->pre_x = 128;
+    pEvdev->pre_y = 128;
+
+    pEvdev->support_directional_key = xf86SetBoolOption(pInfo->options, "Support_Directional_Keys", FALSE);
+
+    pEvdev->keycode_btnA = xf86SetIntOption(pInfo->options, "GamePad_ButtonA", 0);
+    pEvdev->keycode_btnB = xf86SetIntOption(pInfo->options, "GamePad_ButtonB", 0);
+    pEvdev->keycode_btnX = xf86SetIntOption(pInfo->options, "GamePad_ButtonX", 0);
+    pEvdev->keycode_btnY = xf86SetIntOption(pInfo->options, "GamePad_ButtonY", 0);
+    pEvdev->keycode_btnTL = xf86SetIntOption(pInfo->options, "GamePad_ButtonTL", 0);
+    pEvdev->keycode_btnTR = xf86SetIntOption(pInfo->options, "GamePad_ButtonTR", 0);
+    pEvdev->keycode_btnStart = xf86SetIntOption(pInfo->options, "GamePad_ButtonStart", 0);
+    pEvdev->keycode_btnSelect = xf86SetIntOption(pInfo->options, "GamePad_ButtonSelect", 0);
+    pEvdev->keycode_btnPlay = xf86SetIntOption(pInfo->options, "GamePad_ButtonPlay", 0);
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
 
     return Success;
 
@@ -3177,6 +3867,11 @@ EvdevUtilButtonEventToButtonNumber(EvdevPtr pEvdev, int code)
         /* Tablet stylus buttons */
         case BTN_TOUCH ... BTN_STYLUS2:
             return 1 + code - BTN_TOUCH;
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+        /* Game pad buttons */
+        case BTN_A ... BTN_THUMBR:
+            return 8 + code - BTN_A;
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
 
         /* The rest */
         default:
@@ -3352,7 +4047,11 @@ static void EvdevInitAxesLabels(EvdevPtr pEvdev, int mode, int natoms, Atom *ato
     char **labels;
     int labels_len = 0;
 
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    if (mode == Absolute || pEvdev->flags & EVDEV_GAMEPAD)
+#else
     if (mode == Absolute)
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
     {
         labels     = abs_labels;
         labels_len = ArrayLength(abs_labels);
@@ -3389,14 +4088,21 @@ static void EvdevInitButtonLabels(EvdevPtr pEvdev, int natoms, Atom *atoms)
     for (button = 0; button < natoms; button++)
         atoms[button] = atom;
 
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    for (button = BTN_MISC; button < BTN_THUMBR; button++)
+#else
     for (button = BTN_MISC; button < BTN_JOYSTICK; button++)
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
     {
         if (EvdevBitIsSet(pEvdev->key_bitmask, button))
         {
             int group = (button % 0x100)/16;
             int idx = button - ((button/16) * 16);
 
-            if ((!btn_labels[group]) || (!btn_labels[group][idx]))
+            if ((unsigned int)group >= sizeof(btn_labels)/sizeof(btn_labels[0]))
+                continue;
+
+            if (!btn_labels[group][idx])
                 continue;
 
             atom = XIGetKnownProperty(btn_labels[group][idx]);
@@ -3500,6 +4206,8 @@ EvdevInitProperty(DeviceIntPtr dev)
                                     PropModeReplace, 1, &virtual, FALSE);
         XISetDevicePropertyDeletable(dev, prop_virtual, FALSE);
     }
+
+    XISetDevicePropertyDeletable(dev, prop_device, FALSE);
 
 #ifdef _F_EVDEV_CONFINE_REGION_
     if (pEvdev->flags & EVDEV_RELATIVE_EVENTS)

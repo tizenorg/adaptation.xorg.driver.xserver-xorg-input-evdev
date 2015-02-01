@@ -107,6 +107,9 @@ union _InternalEvent {
 #define EVDEV_MAXBUTTONS 32
 #define EVDEV_MAXQUEUE 32
 
+#define EVDEV_PRESS 1
+#define EVDEV_RELEASE 0
+
 /* evdev flags */
 #define EVDEV_KEYBOARD_EVENTS	(1 << 0)
 #define EVDEV_BUTTON_EVENTS	(1 << 1)
@@ -123,6 +126,12 @@ union _InternalEvent {
 #ifdef _F_EVDEV_CONFINE_REGION_
 #define EVDEV_CONFINE_REGION	(1 << 12)
 #endif /* #ifdef _F_EVDEV_CONFINE_REGION_ */
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+#define EVDEV_GAMEPAD   (1 << 13)
+
+#define MAX_GAMEPAD_DEFINITION_ABS 3
+#define MAX_GAMEPAD_DEFINITION_KEY 10
+#endif //_F_EVDEV_SUPPORT_GAMEPAD
 
 #ifndef MAX_VALUATORS
 #define MAX_VALUATORS 36
@@ -193,6 +202,15 @@ typedef struct {
     ValuatorMask *touchMask;
 #endif
 } EventQueueRec, *EventQueuePtr;
+
+#ifdef _F_REMAP_KEYS_
+typedef struct {
+    uint8_t cd[256];
+} EvdevKeyRemapSlice;
+typedef struct {
+    EvdevKeyRemapSlice* sl[256];
+} EvdevKeyRemap, *EvdevKeyRemapPtr;
+#endif //_F_REMAP_KEYS_
 
 typedef struct {
     unsigned short id_vendor;
@@ -276,6 +294,10 @@ typedef struct {
 
     unsigned char btnmap[32];           /* config-file specified button mapping */
 
+#ifdef _F_REMAP_KEYS_
+    EvdevKeyRemapPtr keyremap;
+#endif //_F_REMAP_KEYS_
+
     int reopen_attempts; /* max attempts to re-open after read failure */
     int reopen_left;     /* number of attempts left to re-open the device */
     OsTimerPtr reopen_timer;
@@ -295,6 +317,7 @@ typedef struct {
     BOOL rel_move_ack;
     OsTimerPtr rel_move_timer;
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
+    Bool block_handler_registered;
 #ifdef _F_GESTURE_EXTENSION_
     int *mt_status;
 #endif /* #ifdef _F_GESTURE_EXTENSION_ */
@@ -313,6 +336,30 @@ typedef struct {
     unsigned long abs_bitmask[NLONGS(ABS_CNT)];
     unsigned long led_bitmask[NLONGS(LED_CNT)];
     struct input_absinfo absinfo[ABS_CNT];
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+    int pre_hatx;
+    int pre_haty;
+    int pre_x;
+    int pre_y;
+    int keycode_btnA;
+    int keycode_btnB;
+    int keycode_btnX;
+    int keycode_btnY;
+    int keycode_btnTL;
+    int keycode_btnTR;
+    int keycode_btnStart;
+    int keycode_btnSelect;
+    int keycode_btnPlay;
+
+    BOOL support_directional_key;
+
+    int abs_gamepad_labels[MAX_GAMEPAD_DEFINITION_ABS];
+    int key_gamepad_labels[MAX_GAMEPAD_DEFINITION_KEY];
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
+
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+    BOOL use_default_xkb_rmlvo;
+#endif//_F_USE_DEFAULT_XKB_RULES_
 
     /* minor/major number */
     dev_t min_maj;
@@ -372,4 +419,13 @@ void Evdev3BEmuInitProperty(DeviceIntPtr);
 void EvdevWheelEmuInitProperty(DeviceIntPtr);
 void EvdevDragLockInitProperty(DeviceIntPtr);
 void EvdevAppleInitProperty(DeviceIntPtr);
+#ifdef _F_EVDEV_SUPPORT_GAMEPAD
+static void EvdevMappingGamepadAbsToKey(InputInfoPtr pInfo,  struct input_event *ev);
+static void EvdevMappingGamepadKeyToKey(InputInfoPtr pInfo,  struct input_event *ev);
+static int EvdevIsGamePad(InputInfoPtr pInfo);
+#endif//_F_EVDEV_SUPPORT_GAMEPAD
+static void EvdevProcessEvent(InputInfoPtr pInfo, struct input_event *ev);
 #endif
+#ifdef _F_USE_DEFAULT_XKB_RULES_
+void EvdevGetXkbRules(DeviceIntPtr device, XkbRMLVOSet * rmlvo);
+#endif //_F_USE_DEFAULT_XKB_RULES_
