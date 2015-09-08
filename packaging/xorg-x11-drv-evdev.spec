@@ -1,8 +1,8 @@
 #sbs-git:slp/pkgs/xorg/driver/xserver-xorg-input-evdev xserver-xorg-input-evdev 2.3.2 1bd95071427e460187b090bc5ff5a2d880fe156a
 Name:	xorg-x11-drv-evdev
 Summary:    Xorg X11 evdev input driver
-Version: 2.3.2
-Release:    4
+Version: 2.7.6.11
+Release:    3
 Group:      System/X Hardware Support
 License:    MIT
 URL:        http://www.x.org/
@@ -19,7 +19,11 @@ BuildRequires:  pkgconfig(xrandr)
 BuildRequires:  pkgconfig(randrproto)
 BuildRequires:  pkgconfig(xextproto)
 BuildRequires:  pkgconfig(resourceproto)
-
+BuildRequires:  pkgconfig(libudev)
+BuildRequires:  pkgconfig(mtdev)
+BuildRequires:  model-build-features
+Requires:  libudev
+Requires:  mtdev
 
 %description
 The Xorg X11 evdev input driver
@@ -38,12 +42,25 @@ This package contains xorg evdev development files
 %setup -q
 
 %build
+%autogen
 
-%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_INIT_ABS_ONLY_FOR_POINTER_ -D_F_EVDEV_CONFINE_REGION_"
+%if "%{?tizen_profile_name}" == "mobile"
+export CFLAGS+=" -D_ENV_MOBILE_"
+%else
+%if "%{?tizen_profile_name}" == "wearable"
+export CFLAGS+=" -D_ENV_WEARABLE_"
+%if "%{?model_build_feature_formfactor}" == "circle"
+export CFLAGS+=" -D_F_EVDEV_SUPPORT_ROTARY_"
+%endif
+%endif
+%endif
+%reconfigure --disable-static CFLAGS="$CFLAGS -Wall -g -D_F_EVDEV_CONFINE_REGION_ -D_F_ENABLE_DEVICE_TYPE_PROP_ -D_F_GESTURE_EXTENSION_ -D_F_TOUCH_TRANSFORM_MATRIX_ -D_F_ENABLE_REL_MOVE_STATUS_PROP_ -D_F_EVDEV_SUPPORT_GAMEPAD -D_F_USE_DEFAULT_XKB_RULES_ "
 make %{?jobs:-j%jobs}
 
 %install
 rm -rf %{buildroot}
+mkdir -p %{buildroot}/usr/share/license
+cp -af COPYING %{buildroot}/usr/share/license/%{name}
 %make_install
 
 %remove_docs
@@ -51,9 +68,9 @@ rm -rf %{buildroot}
 %files
 %defattr(-,root,root,-)
 %(pkg-config xorg-server --variable=moduledir )/input/evdev_drv.so
+/usr/share/license/%{name}
 
 %files devel
 %defattr(-,root,root,-)
 %{_includedir}/xorg/evdev-properties.h
 %{_libdir}/pkgconfig/xorg-evdev.pc
-
