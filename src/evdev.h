@@ -47,6 +47,16 @@
 #include <mtdev.h>
 #endif
 
+#ifdef ENABLE_TTRACE
+#include <ttrace.h>
+
+#define TTRACE_BEGIN(NAME) traceBegin(TTRACE_TAG_INPUT, NAME)
+#define TTRACE_END() traceEnd(TTRACE_TAG_INPUT)
+#else //ENABLE_TTRACE
+#define TTRACE_BEGIN(NAME)
+#define TTRACE_END()
+#endif //ENABLE_TTRACE
+
 #ifdef _F_GESTURE_EXTENSION_
 typedef enum _MTSyncType
 {
@@ -59,6 +69,11 @@ typedef enum _MTSyncType
 
 enum EventType
 {
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    ET_Motion = 6,
+    ET_DeviceChanged = 17,
+    ET_RawMotion = 24,
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
     ET_MTSync = 0x7E,
     ET_Internal = 0xFF /* First byte */
 };
@@ -76,6 +91,46 @@ struct _AnyEvent
     int y;
 };
 
+#ifdef _F_PROXY_DEVICE_ENABLED_
+
+#define DEVCHANGE_SLAVE_SWITCH 0x2
+#define DEVCHANGE_KEYBOARD_EVENT 0x8
+
+struct _DeviceChangedEvent {
+    unsigned char header; /**< Always ET_Internal */
+    enum EventType type;  /**< ET_DeviceChanged */
+    int length;           /**< Length in bytes */
+    Time time;            /**< Time in ms */
+    int deviceid;         /**< Device whose capabilities have changed */
+    int flags;            /**< Mask of ::HAS_NEW_SLAVE,
+                               ::POINTER_EVENT, ::KEYBOARD_EVENT */
+    int masterid;         /**< MD when event was generated */
+    int sourceid;         /**< The device that caused the change */
+
+    struct {
+        int num_buttons;        /**< Number of buttons */
+        Atom names[MAX_BUTTONS];/**< Button names */
+    } buttons;
+
+    int num_valuators;          /**< Number of axes */
+    struct {
+        uint32_t min;           /**< Minimum value */
+        uint32_t max;           /**< Maximum value */
+        double value;           /**< Current value */
+        /* FIXME: frac parts of min/max */
+        uint32_t resolution;    /**< Resolution counts/m */
+        uint8_t mode;           /**< Relative or Absolute */
+        Atom name;              /**< Axis name */
+        ScrollInfo scroll;      /**< Smooth scrolling info */
+    } valuators[MAX_VALUATORS];
+
+    struct {
+        int min_keycode;
+        int max_keycode;
+    } keys;
+};
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
+
 union _InternalEvent {
 	struct {
 	    unsigned char header; /**< Always ET_Internal */
@@ -84,7 +139,16 @@ union _InternalEvent {
 	    Time time;            /**< Time in ms. */
 	} any;
 	AnyEvent any_event;
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    DeviceChangedEvent changed_event;
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
 };
+
+#define GESTURE_DEV_NAME "Gesture"
+/* Gesture driver will query devices information
+  * if a gesture driver's control function is called using DEVICE_READY*/
+#define DEVICE_READY 11
+
 #endif /* #ifdef _F_GESTURE_EXTENSION_ */
 
 #ifndef EV_CNT /* linux 2.6.23 kernels and earlier lack _CNT defines */
@@ -112,6 +176,12 @@ union _InternalEvent {
 
 #define EVDEV_PRESS 1
 #define EVDEV_RELEASE 0
+
+#ifdef _ENV_TV_
+#define EVDEV_RMS_TIMEOUT 5000
+#else
+#define EVDEV_RMS_TIMEOUT 15000
+#endif //_ENV_TV_
 
 /* evdev flags */
 #define EVDEV_KEYBOARD_EVENTS	(1 << 0)
@@ -143,6 +213,11 @@ union _InternalEvent {
 #define DEFAULT_HW_ROTARY_MAX 4360
 #endif //_F_EVDEV_SUPPORT_ROTARY_
 
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+#define EVDEV_SMART_RC	(1 << 16) /* air touch mouse is special remote controller for smart tv */
+#define AIR_TOUCH_MOUSE "Advanced Touch REMOTE"
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
+
 #ifndef MAX_VALUATORS
 #define MAX_VALUATORS 36
 #endif
@@ -159,6 +234,18 @@ union _InternalEvent {
 #define XI_PROP_REL_MOVE_STATUS "Relative Move Status"
 #define XI_PROP_REL_MOVE_ACK "Relative Move Acknowledge"
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
+#ifdef _F_BLOCK_MOTION_DEVICE_
+#define XI_PROP_BLOCK_MOTION_DEVICE "Block Motion Device" /*Atom to block motion device */
+#endif //_F_BLOCK_MOTION_DEVICE_
+#ifdef _F_PICTURE_OFF_MODE_ENABLE_
+#define XI_PROP_PICTURE_OFF_MODE "PICTURE_OFF_MODE" /* Atom to check picture off mode */
+#endif //_F_PICTURE_OFF_MODE_ENABLE_
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+#define XI_PROP_USE_PROXY_SLAVE_DEVICE "Use Proxy Slave Device"
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
+
+#define XI_PROP_UNGRAB_DEVICE "Ungrab Device"
 
 #define LONG_BITS (sizeof(long) * 8)
 
@@ -191,6 +278,14 @@ typedef struct {
     int traveled_distance;
 } WheelAxis, *WheelAxisPtr;
 
+#ifdef _F_MULTI_PASSIVE_GRAB_
+typedef struct _ActivatedKeyList
+{
+    CARD8 keycode;
+    struct xorg_list list;
+} ActivatedKeyList;
+#endif //_F_MULTI_PASSIVE_GRAB_
+
 /* Event queue used to defer keyboard/button events until EV_SYN time. */
 typedef struct {
     enum {
@@ -211,7 +306,7 @@ typedef struct {
 #ifdef MULTITOUCH
     ValuatorMask *touchMask;
 #endif
-} EventQueueRec, *EventQueuePtr;
+} EvdevEventQueueRec, *EvdevEventQueuePtr;
 
 #ifdef _F_REMAP_KEYS_
 typedef struct {
@@ -223,6 +318,10 @@ typedef struct {
 #endif //_F_REMAP_KEYS_
 
 typedef struct {
+#ifdef _F_MULTI_PASSIVE_GRAB_
+    ActivatedKeyList *activatedkeylist;
+#endif //_F_MULTI_PASSIVE_GRAB_
+
     unsigned short id_vendor;
     unsigned short id_product;
 
@@ -230,6 +329,7 @@ typedef struct {
     int grabDevice;         /* grab the event device? */
 
     int num_vals;           /* number of valuators */
+    int num_mt_vals;        /* number of multitouch valuators */
     int axis_map[max(ABS_CNT, REL_CNT)]; /* Map evdev <axis> to index */
     ValuatorMask *vals;     /* new values coming in */
     ValuatorMask *old_vals; /* old values for calculating relative motion */
@@ -324,7 +424,7 @@ typedef struct {
 #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
     BOOL rel_move_status;
     BOOL rel_move_prop_set;
-    BOOL rel_move_ack;
+    int rel_move_ack;
     OsTimerPtr rel_move_timer;
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
     Bool block_handler_registered;
@@ -371,12 +471,17 @@ typedef struct {
     BOOL use_default_xkb_rmlvo;
 #endif//_F_USE_DEFAULT_XKB_RULES_
 
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+    int rotation_angle;
+    int rotation_node;
+#endif// _F_SUPPORT_ROTATION_ANGLE_
+
     /* minor/major number */
     dev_t min_maj;
 
     /* Event queue used to defer keyboard/button events until EV_SYN time. */
     int                     num_queue;
-    EventQueueRec           queue[EVDEV_MAXQUEUE];
+    EvdevEventQueueRec           queue[EVDEV_MAXQUEUE];
 
     enum fkeymode           fkeymode;
 
@@ -385,6 +490,21 @@ typedef struct {
     void (*extra_rel_post_hallic) (InputInfoPtr pInfo, int num_v, int first_v, int v[MAX_VALUATORS]);
     int HW_Calibration;
 #endif //_F_EVDEV_SUPPORT_ROTARY_
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+    int rc_state;
+#ifdef _F_SMART_RC_CHG_KBD_SRC_DEV_
+    int (*extra_input_process) (InputInfoPtr *ppInfo, struct input_event *ev);
+#else
+    int (*extra_input_process) (InputInfoPtr pInfo, struct input_event *ev);
+#endif
+    void (*origin_input_process) (InputInfoPtr pInfo, struct input_event *ev);
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    Bool proxy_enabled;
+    Bool b_proxy_device;
+    InputInfoPtr proxy_device;
+#endif //_F_PROXY_DEVICE_ENABLED_
 } EvdevRec, *EvdevPtr;
 
 /* Event posting functions */
@@ -445,7 +565,13 @@ static void EvdevMappingGamepadKeyToKey(InputInfoPtr pInfo,  struct input_event 
 static int EvdevIsGamePad(InputInfoPtr pInfo);
 #endif//_F_EVDEV_SUPPORT_GAMEPAD
 static void EvdevProcessEvent(InputInfoPtr pInfo, struct input_event *ev);
-#endif
 #ifdef _F_USE_DEFAULT_XKB_RULES_
 void EvdevGetXkbRules(DeviceIntPtr device, XkbRMLVOSet * rmlvo);
 #endif //_F_USE_DEFAULT_XKB_RULES_
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+void EvdevRCInit(DeviceIntPtr device);
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
+#ifdef _F_PROXY_DEVICE_ENABLED_
+void EvdevProxyInit(DeviceIntPtr device);
+#endif //_F_PROXY_DEVICE_ENABLED_
+#endif

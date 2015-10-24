@@ -96,4 +96,14 @@
 #define EVDEV_PROP_TOUCH_TRANSFORM_MATRIX "Evdev Touch Transform Matrix"
 #endif /* #ifdef _F_TOUCH_TRANSFORM_MATRIX_ */
 
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+/* Real/fake Rotation angle of a touch device */
+/* CARD8, value range 0-3 : 0(0), 1 (90), 3(180), 2(270) */
+#define EVDEV_PROP_ROTATION_ANGLE "Evdev Rotation Angle"
+
+/* File descriptor value of rotation device node to control TSP rotation origin */
+/* CARD32, value will be between file descriptors range */
+#define EVDEV_PROP_ROTATION_NODE "Evdev Rotation Node"
+#endif /* #ifdef _F_SUPPORT_ROTATION_ANGLE_ */
+
 #endif

@@ -25,12 +25,12 @@
 # _ladir passes a dummy rpath to libtool so the thing will actually link
 # TODO: -nostdlib/-Bstatic/-lgcc platform magic, not installing the .a, etc.
 
-AM_CFLAGS = $(XORG_CFLAGS) $(CWARNFLAGS)
+AM_CFLAGS = $(XORG_CFLAGS) $(CWARNFLAGS) $(TTRACE_CPPFLAGS)
 AM_CPPFLAGS =-I$(top_srcdir)/include
 
 @DRIVER_NAME@_drv_la_LTLIBRARIES = @DRIVER_NAME@_drv.la
-@DRIVER_NAME@_drv_la_LDFLAGS = -module -avoid-version
-@DRIVER_NAME@_drv_la_LIBADD = $(MTDEV_LIBS)
+@DRIVER_NAME@_drv_la_LDFLAGS = -module -avoid-version $(TTRACE_LIBS)
+@DRIVER_NAME@_drv_la_LIBADD = $(MTDEV_LIBS) $(UDEV_LIBS)
 @DRIVER_NAME@_drv_ladir = @inputdir@
 
 @DRIVER_NAME@_drv_la_SOURCES = @DRIVER_NAME@.c \
@@ -40,4 +40,6 @@ AM_CPPFLAGS =-I$(top_srcdir)/include
                                emuWheel.c \
                                draglock.c \
                                apple.c \
-                               rotary.c
+                               rotary.c \
+                               smartRC.c \
+                               proxyDev.c

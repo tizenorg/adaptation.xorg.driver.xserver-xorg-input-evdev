@@ -52,6 +52,9 @@
 
 #include <xf86.h>
 #include <xf86Xinput.h>
+#ifdef _F_PROXY_DEVICE_ENABLED_
+#include <xorg/optionstr.h>
+#endif //_F_PROXY_DEVICE_ENABLED_
 #include <exevents.h>
 #include <xorgVersion.h>
 #include <xkbsrv.h>
@@ -89,6 +92,11 @@
 #include <inputstr.h> /* for MAX_DEVICES */
 #define MAXDEVICES MAX_DEVICES
 #endif
+
+#ifdef _F_PICTURE_OFF_MODE_ENABLE_
+#define XI_PROP_PICTURE_OFF_MODE "PICTURE_OFF_MODE"
+static Atom atomPictureOffMode;
+#endif //_F_PICTURE_OFF_MODE_ENABLE_
 
 #define ArrayLength(a) (sizeof(a) / (sizeof((a)[0])))
 
@@ -133,6 +141,8 @@ static int proximity_bits[] = {
         BTN_TOOL_LENS,
 };
 
+extern char * strcasestr(const char *haystack, const char *needle);
+
 static int EvdevOn(DeviceIntPtr);
 static int EvdevCache(InputInfoPtr pInfo);
 static void EvdevKbdCtrl(DeviceIntPtr device, KeybdCtrl *ctrl);
@@ -140,6 +150,7 @@ static int EvdevSwitchMode(ClientPtr client, DeviceIntPtr device, int mode);
 static BOOL EvdevGrabDevice(InputInfoPtr pInfo, int grab, int ungrab);
 static void EvdevSetCalibration(InputInfoPtr pInfo, int num_calibration, int calibration[4]);
 static int EvdevOpenDevice(InputInfoPtr pInfo);
+static void EvdevCloseDevice(InputInfoPtr pInfo);
 
 static void EvdevInitAxesLabels(EvdevPtr pEvdev, int mode, int natoms, Atom *atoms);
 static void EvdevInitButtonLabels(EvdevPtr pEvdev, int natoms, Atom *atoms);
@@ -154,6 +165,9 @@ static BOOL EvdevMTStatusGet(InputInfoPtr pInfo, MTSyncType sync);
 #ifdef _F_TOUCH_TRANSFORM_MATRIX_
 static void EvdevSetTransformMatrix(InputInfoPtr pInfo, int num_transform, float *tmatrix);
 #endif /* #ifdef _F_TOUCH_TRANSFORM_MATRIX_ */
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+static void EvdevSetRotationAngle(EvdevPtr pEvdev, int angle);
+#endif /* _F_SUPPORT_ROTATION_ANGLE_ */
 #ifdef _F_EVDEV_CONFINE_REGION_
 Bool IsMaster(DeviceIntPtr dev);
 DeviceIntPtr GetPairedDevice(DeviceIntPtr dev);
@@ -163,12 +177,20 @@ static void EvdevHookPointerCursorLimits(DeviceIntPtr pDev, ScreenPtr pScreen, C
 static void EvdevHookPointerConstrainCursor (DeviceIntPtr pDev, ScreenPtr pScreen, BoxPtr pBox);
 static void EvdevSetCursorLimits(InputInfoPtr pInfo, int region[6], int isSet);
 static void EvdevSetConfineRegion(InputInfoPtr pInfo, int num_item, int region[6]);
-#ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
-static CARD32 EvdevRelativeMoveTimer(OsTimerPtr timer, CARD32 time, pointer arg);
-#endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
+
+#ifdef MULTITOUCH
+static int num_slots(EvdevPtr pEvdev);
+#endif
 
 static Atom prop_confine_region = 0;
 #endif /* _F_EVDEV_CONFINE_REGION_ */
+#ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
+static CARD32 EvdevRelativeMoveTimer(OsTimerPtr timer, CARD32 time, pointer arg);
+#endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
+#ifdef _F_DONOT_SEND_RMA_BTN_RELEASE_
+static BOOL isButtonPressed = FALSE;
+#endif //_F_DONOT_SEND_RMA_BTN_RELEASE_
+
 static Atom prop_product_id;
 static Atom prop_invert;
 static Atom prop_calibration;
@@ -184,6 +206,18 @@ static Atom prop_device_type;
 static Atom prop_relative_move_status;
 static Atom prop_relative_move_ack;
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
+
+#ifdef _F_BLOCK_MOTION_DEVICE_
+static Atom prop_block_motion_status; /* Atom to block motion device */
+int block_motion_device = 0;   /* Variable to set/unset of motion device */
+#endif //_F_BLOCK_MOTION_DEVICE_
+#ifdef _F_PICTURE_OFF_MODE_ENABLE_
+int pictureOffMode;
+#endif //_F_PICTURE_OFF_MODE_ENABLE_
+#ifdef _F_BOOST_PULSE_
+static int fd_boostpulse = 0;
+#endif //_F_BOOST_PULSE_
+
 #ifdef _F_TOUCH_TRANSFORM_MATRIX_
 static Atom prop_transform;
 #endif /* #ifdef _F_TOUCH_TRANSFORM_MATRIX_ */
@@ -191,6 +225,32 @@ static Atom prop_transform;
 #ifdef _F_USE_DEFAULT_XKB_RULES_
 static Atom prop_xkb_rules = None;
 #endif //_F_USE_DEFAULT_XKB_RULES_
+
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+static Atom prop_rotation_angle = 0;
+static Atom prop_rotation_node = 0;
+#endif //_F_SUPPORT_ROTATION_ANGLE_
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+static Atom prop_use_proxy_slave_device;
+static InputInfoPtr pCreatorInfo = NULL;
+static InputInfoPtr pProxyDeviceInfo = NULL;
+#define PROXY_DEV_NAME	"HWKeys"
+#define OPT_TYPE_VAL "ProxyDev"
+
+static int EvdevSetProxyDevice(DeviceIntPtr dev, int val);
+static InputOption *EvdevOptionDupConvert(pointer original);
+static void EvdevFreeInputOpts(InputOption* opts);
+static void EvdevReplaceOption(InputOption *opts,const char* key, char * value);
+static InputInfoPtr EvdevCreateProxyDevice(InputInfoPtr pInfo);
+static void EvdevProxydevReadInput(InputInfoPtr pInfo);
+static void MakeClassesChangedEvent(DeviceChangedEvent *dce, DeviceIntPtr master, DeviceIntPtr slave, int flags);
+#ifndef _F_PROXY_DEVICE_CHANGE_SOURCE_ID
+static void EvdevPostDevChangeEvent(InputInfoPtr pInfo);
+#else /* _F_PROXY_DEVICE_CHANGE_SOURCE_ID */
+static void EvdevCheckDevChange(EvdevPtr pEvdev, int deviceid);
+#endif /* _F_PROXY_DEVICE_CHANGE_SOURCE_ID */
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
 
 /* All devices the evdev driver has allocated and knows about.
  * MAXDEVICES is safe as null-terminated array, as two devices (VCP and VCK)
@@ -218,9 +278,11 @@ addRemap(EvdevPtr ev,uint16_t code,uint8_t value)
 
     if (!ev->keyremap) {
         ev->keyremap=(EvdevKeyRemapPtr)calloc(sizeof(EvdevKeyRemap),1);
+        if (!ev->keyremap) return;
     }
     if (!ev->keyremap->sl[slice]) {
         ev->keyremap->sl[slice]=(EvdevKeyRemapSlice*)calloc(sizeof(EvdevKeyRemapSlice),1);
+        if (!ev->keyremap->sl[slice]) return;
      }
      ev->keyremap->sl[slice]->cd[offs]=value;
 }
@@ -453,7 +515,7 @@ SetRemapOption(InputInfoPtr pInfo,const char* name)
     c=s;
     while (sscanf(c," %li = %li %n",&code,&value,&consumed) > 1) {
         c+=consumed;
-        if (code < 0 || code > 65535L) {
+        if (code > 65535L) {
             xf86Msg(X_ERROR,"%s: input code %ld out of range for option \"event_key_remap\", ignoring.\n",pInfo->name,code);
             continue;
         }
@@ -469,10 +531,11 @@ SetRemapOption(InputInfoPtr pInfo,const char* name)
         xf86Msg(X_ERROR, "%s: invalid input for option \"event_key_remap\" starting at '%s', ignoring.\n",
                 pInfo->name, c);
     }
+    free(s);
 }
 #endif //_F_REMAP_KEYS_
 
-static EventQueuePtr
+static EvdevEventQueuePtr
 EvdevNextInQueue(InputInfoPtr pInfo)
 {
     EvdevPtr pEvdev = pInfo->private;
@@ -495,12 +558,17 @@ EvdevQueueKbdEvent(InputInfoPtr pInfo, struct input_event *ev, int value)
 #else //_F_REMAP_KEYS_
     int code = ev->code + MIN_KEYCODE;
 #endif //_F_REMAP_KEYS_
-    EventQueuePtr pQueue;
+    EvdevEventQueuePtr pQueue;
 
     /* Filter all repeated events from device.
        We'll do softrepeat in the server, but only since 1.6 */
     if (value == 2)
         return;
+
+#ifdef _F_BOOST_PULSE_
+    if (fd_boostpulse && value == 1)
+       write(fd_boostpulse, (void *) "1", 1);
+#endif //_F_BOOST_PULSE_
 
     if ((pQueue = EvdevNextInQueue(pInfo)))
     {
@@ -513,7 +581,12 @@ EvdevQueueKbdEvent(InputInfoPtr pInfo, struct input_event *ev, int value)
 void
 EvdevQueueButtonEvent(InputInfoPtr pInfo, int button, int value)
 {
-    EventQueuePtr pQueue;
+    EvdevEventQueuePtr pQueue;
+
+#ifdef _F_BOOST_PULSE_
+   if (fd_boostpulse && value == 1)
+      write(fd_boostpulse, (void *) "1", 1);
+#endif //_F_BOOST_PULSE_
 
     if ((pQueue = EvdevNextInQueue(pInfo)))
     {
@@ -526,7 +599,7 @@ EvdevQueueButtonEvent(InputInfoPtr pInfo, int button, int value)
 void
 EvdevQueueProximityEvent(InputInfoPtr pInfo, int value)
 {
-    EventQueuePtr pQueue;
+    EvdevEventQueuePtr pQueue;
     if ((pQueue = EvdevNextInQueue(pInfo)))
     {
         pQueue->type = EV_QUEUE_PROXIMITY;
@@ -540,7 +613,7 @@ void
 EvdevQueueTouchEvent(InputInfoPtr pInfo, unsigned int touch, ValuatorMask *mask,
                      uint16_t evtype)
 {
-    EventQueuePtr pQueue;
+    EvdevEventQueuePtr pQueue;
     if ((pQueue = EvdevNextInQueue(pInfo)))
     {
         pQueue->type = EV_QUEUE_TOUCH;
@@ -1192,8 +1265,34 @@ EvdevProcessButtonEvent(InputInfoPtr pInfo, struct input_event *ev)
     if (EvdevMBEmuFilterEvent(pInfo, button, value))
         return;
 
-    if (button)
-        EvdevQueueButtonEvent(pInfo, button, value);
+    if (button) {
+#ifdef _F_PICTURE_OFF_MODE_ENABLE_
+       if((pictureOffMode == 1) && (button == 1)) {
+          if(value == 0) {
+             /* Send right button press and release instead of left button press/release */
+             button = 3;
+             EvdevQueueButtonEvent(pInfo, button, 1);
+             EvdevQueueButtonEvent(pInfo, button, 0);
+          } else ; /* Do nothing Ignore the left button press event */
+       }
+       else {
+          /* When button is pressed, cancel timer for cursor hide*/
+          if(value == 1) {
+             isButtonPressed = TRUE;
+          } else {
+             isButtonPressed = FALSE;
+             if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+             TimerCancel(pEvdev->rel_move_timer);
+             if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+             pEvdev->rel_move_timer = TimerSet(pEvdev->rel_move_timer, 0, EVDEV_RMS_TIMEOUT, EvdevRelativeMoveTimer, pInfo);
+             if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+          }
+          EvdevQueueButtonEvent(pInfo, button, value);
+       }
+#else //_F_PICTURE_OFF_MODE_ENABLE_
+       EvdevQueueButtonEvent(pInfo, button, value);
+#endif //_F_PICTURE_OFF_MODE_ENABLE_
+    }
     else
         EvdevQueueKbdEvent(pInfo, ev, value);
 }
@@ -1207,6 +1306,8 @@ EvdevProcessRelativeMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
     int value;
     EvdevPtr pEvdev = pInfo->private;
     int map;
+
+    TTRACE_BEGIN("XORG:EVDEV:PROCESS_REL_MOTION");
 
     /* Get the signed value, earlier kernels had this as unsigned */
     value = ev->value;
@@ -1231,12 +1332,16 @@ EvdevProcessRelativeMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
 #endif
         default:
             /* Ignore EV_REL events if we never set up for them. */
-            if (!(pEvdev->flags & EVDEV_RELATIVE_EVENTS))
+            if (!(pEvdev->flags & EVDEV_RELATIVE_EVENTS)) {
+                TTRACE_END();
                 return;
+            }
 
             /* Handle mouse wheel emulation */
-            if (EvdevWheelEmuFilterMotion(pInfo, ev))
+            if (EvdevWheelEmuFilterMotion(pInfo, ev)) {
+                TTRACE_END();
                 return;
+            }
 
             pEvdev->rel_queued = 1;
             pEvdev->delta[ev->code] += value;
@@ -1244,6 +1349,7 @@ EvdevProcessRelativeMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
             valuator_mask_set(pEvdev->vals, map, value);
             break;
     }
+    TTRACE_END();
 }
 
 #ifdef MULTITOUCH
@@ -1267,7 +1373,6 @@ EvdevProcessTouch(InputInfoPtr pInfo)
     else
         type = XI_TouchUpdate;
 
-
     EvdevQueueTouchEvent(pInfo, pEvdev->cur_slot, pEvdev->mt_mask, type);
 
     pEvdev->slot_state = SLOTSTATE_EMPTY;
@@ -1278,8 +1383,15 @@ EvdevProcessTouch(InputInfoPtr pInfo)
 static int
 num_slots(EvdevPtr pEvdev)
 {
-    int value = pEvdev->absinfo[ABS_MT_SLOT].maximum -
-                pEvdev->absinfo[ABS_MT_SLOT].minimum + 1;
+    int value = 0;
+
+    if (pEvdev->mtdev) {
+        value = pEvdev->mtdev->caps.slot.maximum + 1;
+    }
+    else {
+        value= pEvdev->absinfo[ABS_MT_SLOT].maximum -
+                    pEvdev->absinfo[ABS_MT_SLOT].minimum + 1;
+    }
 
     /* If we don't know how many slots there are, assume at least 10 */
     return value > 1 ? value : 10;
@@ -1345,25 +1457,27 @@ EvdevProcessAbsoluteMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
     EvdevPtr pEvdev = pInfo->private;
     int map;
 
+    TTRACE_BEGIN("XORG:EVDEV:PROCESS_ABS_MOTION");
+
     /* Get the signed value, earlier kernels had this as unsigned */
     value = ev->value;
 #ifdef _F_EVDEV_SUPPORT_GAMEPAD
     if(pEvdev->flags & EVDEV_GAMEPAD)
     {
       EvdevMappingGamepadAbsToKey(pInfo, ev);
-      return;
+      goto out;
     }
 #endif//_F_EVDEV_SUPPORT_GAMEPAD
 
     /* Ignore EV_ABS events if we never set up for them. */
     if (!(pEvdev->flags & EVDEV_ABSOLUTE_EVENTS))
-        return;
+        goto out;
 
     if (ev->code > ABS_MAX)
-        return;
+        goto out;
 
     if (EvdevWheelEmuFilterMotion(pInfo, ev))
-        return;
+        goto out;
 
     if (ev->code >= ABS_MT_SLOT) {
         EvdevProcessTouchEvent(pInfo, ev);
@@ -1374,12 +1488,14 @@ EvdevProcessAbsoluteMotionEvent(InputInfoPtr pInfo, struct input_event *ev)
 	if(map < 0)
 	{
 		xf86IDrvMsg(pInfo, X_INFO, "[EvdevProcessAbsoluteMotionEvent] Invalid valuator (=%d), value=%d\nThis is going to be skipped.", map, value);
-		return;
+		goto out;
 	}
 
         valuator_mask_set(pEvdev->vals, map, value);
         pEvdev->abs_queued = 1;
     }
+out:
+    TTRACE_END();
 }
 
 /**
@@ -1391,20 +1507,24 @@ EvdevProcessKeyEvent(InputInfoPtr pInfo, struct input_event *ev)
     int value, i;
     EvdevPtr pEvdev = pInfo->private;
 
+    TTRACE_BEGIN("XORG:EVDEV:PROCESS_KEY_MOTION");
+
     /* Get the signed value, earlier kernels had this as unsigned */
     value = ev->value;
 
     /* don't repeat mouse buttons */
-    if (ev->code >= BTN_MOUSE && ev->code < KEY_OK)
-        if (value == 2)
-            return;
-
+    if (ev->code >= BTN_MOUSE && ev->code < KEY_OK) {
+        if (value == 2) {
+            goto out;
+        }
+    }
 #ifdef _F_EVDEV_SUPPORT_GAMEPAD
     if(pEvdev->flags & EVDEV_GAMEPAD)
     {
         EvdevMappingGamepadKeyToKey(pInfo, ev);
-        if (ev->code == 0)
-            return;
+        if (ev->code == 0) {
+            goto out;
+        }
     }
 #endif//_F_EVDEV_SUPPORT_GAMEPAD
 
@@ -1414,7 +1534,7 @@ EvdevProcessKeyEvent(InputInfoPtr pInfo, struct input_event *ev)
         if (ev->code == proximity_bits[i])
         {
             EvdevProcessProximityEvent(pInfo, ev);
-            return;
+            goto out;
         }
     }
 
@@ -1436,6 +1556,8 @@ EvdevProcessKeyEvent(InputInfoPtr pInfo, struct input_event *ev)
             EvdevProcessButtonEvent(pInfo, ev);
             break;
     }
+out:
+    TTRACE_END();
 }
 
 #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
@@ -1449,20 +1571,27 @@ EvdevRelativeMoveTimer(OsTimerPtr timer, CARD32 time, pointer arg)
     else return 0;
 
     if(!pEvdev) return 0;
+    if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
     if(pEvdev->rel_move_timer)
         TimerCancel(pEvdev->rel_move_timer);
-    pEvdev->rel_move_timer = NULL;
-
-    pEvdev->rel_move_status = 0;
-    pEvdev->rel_move_ack = 0;
-    int rc = XIDeleteDeviceProperty(pInfo->dev, prop_relative_move_status, TRUE);
-
-    if (rc != Success)
+    if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+#ifdef _F_DONOT_SEND_RMA_BTN_RELEASE_
+    if(!isButtonPressed)
     {
-        xf86IDrvMsg(pInfo, X_ERROR, "[%s] Failed to delete device property (id:%d, prop=%d)\n", __FUNCTION__, pInfo->dev->id, prop_relative_move_status);
-    }
+#endif //_F_DONOT_SEND_RMA_BTN_RELEASE_
+        pEvdev->rel_move_status = 0;
+        if (pEvdev->rel_move_ack != 2)
+            pEvdev->rel_move_ack = 0;
+        int rc = XIDeleteDeviceProperty(pInfo->dev, prop_relative_move_status, TRUE);
 
-    ErrorF("[%s] pEvdev->rel_move_status=%d\n", __FUNCTION__, pEvdev->rel_move_status);
+        if (rc != Success)
+        {       if (pEvdev->rel_move_ack != 2)
+         pEvdev->rel_move_ack = 0;
+            xf86IDrvMsg(pInfo, X_ERROR, "[%s] Failed to delete device property (id:%d, prop=%d)\n", __FUNCTION__, pInfo->dev->id, prop_relative_move_status);
+        }
+#ifdef _F_DONOT_SEND_RMA_BTN_RELEASE_
+    }
+#endif //_F_DONOT_SEND_RMA_BTN_RELEASE_
 
     return 0;
 }
@@ -1550,7 +1679,11 @@ EvdevPostRelativeMotionEvents(InputInfoPtr pInfo, int num_v, int first_v,
 {
     EvdevPtr pEvdev = pInfo->private;
 
+#ifdef _F_BLOCK_MOTION_DEVICE_
+    if (pEvdev->rel_queued && (block_motion_device ==0)) {
+#else //_F_BLOCK_MOTION_DEVICE_
     if (pEvdev->rel_queued) {
+#endif //_F_BLOCK_MOTION_DEVICE_
 #ifdef _F_EVDEV_SUPPORT_ROTARY_
         if (pEvdev->flags & EVDEV_OFM) {
             pEvdev->extra_rel_post_ofm(pInfo, num_v, first_v, v);
@@ -1573,9 +1706,11 @@ EvdevPostRelativeMotionEvents(InputInfoPtr pInfo, int num_v, int first_v,
 		RegisterBlockAndWakeupHandlers(EvdevBlockHandler ,(WakeupHandlerProcPtr) NoopDDA, pInfo);
 	}
 
+	if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
 	TimerCancel(pEvdev->rel_move_timer);
-	pEvdev->rel_move_timer = NULL;
-	pEvdev->rel_move_timer = TimerSet(pEvdev->rel_move_timer, 0, 15000, EvdevRelativeMoveTimer, pInfo);
+	if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+	pEvdev->rel_move_timer = TimerSet(pEvdev->rel_move_timer, 0, EVDEV_RMS_TIMEOUT, EvdevRelativeMoveTimer, pInfo);
+	if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
         xf86PostMotionEventM(pInfo->dev, Relative, pEvdev->vals);
     }
@@ -1599,7 +1734,11 @@ EvdevPostAbsoluteMotionEvents(InputInfoPtr pInfo, int num_v, int first_v,
      * pEvdev->in_proximity is initialized to 1 so devices that don't use
      * this scheme still just work.
      */
+#ifdef _F_BLOCK_MOTION_DEVICE_
+    if (pEvdev->abs_queued && pEvdev->in_proximity && block_motion_device == 0 ) {
+#else //_F_BLOCK_MOTION_DEVICE_
     if (pEvdev->abs_queued && pEvdev->in_proximity) {
+#endif //_F_BLOCK_MOTION_DEVICE_
         xf86PostMotionEventM(pInfo->dev, Absolute, pEvdev->vals);
     }
 }
@@ -1649,6 +1788,21 @@ static void EvdevPostQueuedEvents(InputInfoPtr pInfo, int num_v, int first_v,
 
     EvdevPtr pEvdev = pInfo->private;
 
+#ifdef _F_PROXY_DEVICE_ENABLED_
+#ifdef _F_PROXY_DEVICE_CHANGE_SOURCE_ID
+    if(!(pInfo->dev))
+    {
+        return;
+    }
+
+    EvdevCheckDevChange(pEvdev, pInfo->dev->id);
+#else
+    if(pEvdev->proxy_device){
+        EvdevPostDevChangeEvent(pEvdev->proxy_device);
+    }
+#endif
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
+
     for (i = 0; i < pEvdev->num_queue; i++) {
         switch (pEvdev->queue[i].type) {
         case EV_QUEUE_KEY:
@@ -1669,6 +1823,7 @@ static void EvdevPostQueuedEvents(InputInfoPtr pInfo, int num_v, int first_v,
             } else
                 xf86PostButtonEvent(pInfo->dev, Relative, pEvdev->queue[i].detail.key,
                                     pEvdev->queue[i].val, 0, 0);
+
             break;
         case EV_QUEUE_PROXIMITY:
             break;
@@ -1710,12 +1865,12 @@ static void EvdevPostQueuedEvents(InputInfoPtr pInfo, int num_v, int first_v,
 
                 if ((XI_TouchBegin == event_type) && (slot_idx == 0))
                 {
-	                if (EvdevMTStatusGet(pInfo, MTOUCH_FRAME_SYNC_BEGIN))
-	                {
-				sync_value = MTOUCH_FRAME_SYNC_BEGIN;
-	                	EvdevMTSync(pInfo, MTOUCH_FRAME_SYNC_BEGIN);
-	                }
-                }
+	             if (EvdevMTStatusGet(pInfo, MTOUCH_FRAME_SYNC_BEGIN))
+	             {
+	                 sync_value = MTOUCH_FRAME_SYNC_BEGIN;
+	                 EvdevMTSync(pInfo, MTOUCH_FRAME_SYNC_BEGIN);
+	             }
+	         }
 
                 xf86PostTouchEvent(pInfo->dev, slot_idx,
                                event_type, 0,
@@ -1723,10 +1878,14 @@ static void EvdevPostQueuedEvents(InputInfoPtr pInfo, int num_v, int first_v,
 
                 if ((sync_value < 0) && (XI_TouchEnd == event_type))
                 {
-	                if (EvdevMTStatusGet(pInfo, MTOUCH_FRAME_SYNC_END))
-	                {
-	                	EvdevMTSync(pInfo, MTOUCH_FRAME_SYNC_END);
-	                }
+                    if (EvdevMTStatusGet(pInfo, MTOUCH_FRAME_SYNC_END))
+                    {
+                        EvdevMTSync(pInfo, MTOUCH_FRAME_SYNC_END);
+                    }
+                    else
+                    {
+                        EvdevMTSync(pInfo, MTOUCH_FRAME_SYNC_UPDATE);
+                    }
                 }
             }
 #else /* #ifdef _F_GESTURE_EXTENSION_ */
@@ -1751,6 +1910,7 @@ EvdevProcessSyncEvent(InputInfoPtr pInfo, struct input_event *ev)
     int num_v = 0, first_v = 0;
     int v[MAX_VALUATORS] = {};
     EvdevPtr pEvdev = pInfo->private;
+    TTRACE_BEGIN("XORG:EVDEV:PROCESS_SYNC_MOTION");
 
     EvdevProcessProximityState(pInfo);
 
@@ -1766,7 +1926,7 @@ EvdevProcessSyncEvent(InputInfoPtr pInfo, struct input_event *ev)
     memset(pEvdev->delta, 0, sizeof(pEvdev->delta));
     for (i = 0; i < ArrayLength(pEvdev->queue); i++)
     {
-        EventQueuePtr queue = &pEvdev->queue[i];
+        EvdevEventQueuePtr queue = &pEvdev->queue[i];
         queue->detail.key = 0;
         queue->type = 0;
         queue->val = 0;
@@ -1780,6 +1940,7 @@ EvdevProcessSyncEvent(InputInfoPtr pInfo, struct input_event *ev)
     pEvdev->rel_queued = 0;
     pEvdev->prox_queued = 0;
 
+    TTRACE_END();
 }
 
 /**
@@ -1789,6 +1950,34 @@ EvdevProcessSyncEvent(InputInfoPtr pInfo, struct input_event *ev)
 static void
 EvdevProcessEvent(InputInfoPtr pInfo, struct input_event *ev)
 {
+    TTRACE_BEGIN("XORG:EVDEV:PROCESS_EVENT");
+
+    EvdevPtr pEvdev = pInfo->private;
+    int result = 0;
+
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+    if (pEvdev->extra_input_process) {
+#ifdef _F_SMART_RC_CHG_KBD_SRC_DEV_
+        result = pEvdev->extra_input_process(&pInfo, ev);
+#else
+        result = pEvdev->extra_input_process(pInfo, ev);
+#endif
+        if (!result) {
+            return;
+        }
+    }
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
+
+#ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
+    if (pEvdev->rel_move_ack == 2) {
+        if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+        TimerCancel(pEvdev->rel_move_timer);
+        if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+        pEvdev->rel_move_status = 0;
+
+        return;
+    }
+#endif//_F_ENABLE_REL_MOVE_STATUS_PROP_
     switch (ev->type) {
         case EV_REL:
             EvdevProcessRelativeMotionEvent(pInfo, ev);
@@ -1803,6 +1992,7 @@ EvdevProcessEvent(InputInfoPtr pInfo, struct input_event *ev)
             EvdevProcessSyncEvent(pInfo, ev);
             break;
     }
+    TTRACE_END();
 }
 
 #undef ABS_X_VALUE
@@ -1812,7 +2002,9 @@ EvdevProcessEvent(InputInfoPtr pInfo, struct input_event *ev)
 static void
 EvdevFreeMasks(EvdevPtr pEvdev)
 {
+#ifdef MULTITOUCH
     int i;
+#endif
 
     valuator_mask_free(&pEvdev->vals);
     valuator_mask_free(&pEvdev->old_vals);
@@ -1840,6 +2032,8 @@ EvdevReadInput(InputInfoPtr pInfo)
     struct input_event ev[NUM_EVENTS];
     int i, len = sizeof(ev);
 
+    TTRACE_BEGIN("XORG:EVDEV:READ_INPUT");
+
     while (len == sizeof(ev))
     {
 #ifdef MULTITOUCH
@@ -1859,9 +2053,8 @@ EvdevReadInput(InputInfoPtr pInfo)
                 EvdevMBEmuFinalize(pInfo);
                 Evdev3BEmuFinalize(pInfo);
                 xf86RemoveEnabledDevice(pInfo);
-                close(pInfo->fd);
-                pInfo->fd = -1;
-            } else if (errno != EAGAIN)
+            }
+            else if (errno != EAGAIN)
             {
                 /* We use X_NONE here because it doesn't alloc */
                 xf86MsgVerb(X_NONE, 0, "%s: Read error: %s\n", pInfo->name,
@@ -1881,6 +2074,7 @@ EvdevReadInput(InputInfoPtr pInfo)
         for (i = 0; i < len/sizeof(ev[0]); i++)
             EvdevProcessEvent(pInfo, &ev[i]);
     }
+    TTRACE_END();
 }
 
 static void
@@ -2124,6 +2318,7 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device)
     }
 #ifdef MULTITOUCH
     if (num_mt_axes_total > 0) {
+        pEvdev->num_mt_vals = num_mt_axes_total;
         pEvdev->mt_mask = valuator_mask_new(num_mt_axes_total);
         if (!pEvdev->mt_mask) {
             xf86Msg(X_ERROR, "%s: failed to allocate MT valuator mask.\n",
@@ -2164,7 +2359,9 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device)
 
     i = 0;
     for (axis = ABS_X; i < MAX_VALUATORS && axis <= ABS_MAX; axis++) {
+#ifdef MULTITOUCH
         int j;
+#endif
         int mapping;
         pEvdev->axis_map[axis] = -1;
         if (!EvdevBitIsSet(pEvdev->abs_bitmask, axis) ||
@@ -2203,8 +2400,7 @@ EvdevAddAbsValuatorClass(DeviceIntPtr device)
         int mode = pEvdev->flags & EVDEV_TOUCHPAD ?
             XIDependentTouch : XIDirectTouch;
 
-        if (pEvdev->mtdev && pEvdev->mtdev->caps.slot.maximum > 0)
-            num_touches = pEvdev->mtdev->caps.slot.maximum;
+        num_touches = num_slots(pEvdev);
 
         if (!InitTouchClassDeviceStruct(device, num_touches, mode,
                                         num_mt_axes_total)) {
@@ -2423,7 +2619,7 @@ EvdevAddRelValuatorClass(DeviceIntPtr device)
         else if (axis == REL_DIAL)
             SetScrollValuator(device, axnum, SCROLL_TYPE_VERTICAL, -1.0, SCROLL_FLAG_NONE);
         else if (axis == REL_HWHEEL)
-            SetScrollValuator(device, axnum, SCROLL_TYPE_HORIZONTAL, -1.0, SCROLL_FLAG_NONE);
+            SetScrollValuator(device, axnum, SCROLL_TYPE_HORIZONTAL, 1.0, SCROLL_FLAG_NONE);
 #endif
     }
 
@@ -2487,12 +2683,12 @@ EvdevInitButtonMapping(InputInfoPtr pInfo)
     /* Check for user-defined button mapping */
     if ((mapping = xf86CheckStrOption(pInfo->options, "ButtonMapping", NULL)))
     {
-        char    *map, *s = " ";
+        char    *map, *s = NULL;
         int     btn = 0;
 
         xf86IDrvMsg(pInfo, X_CONFIG, "ButtonMapping '%s'\n", mapping);
         map = mapping;
-        while (s && *s != '\0' && nbuttons < EVDEV_MAXBUTTONS)
+        do
         {
             btn = strtol(map, &s, 10);
 
@@ -2506,7 +2702,7 @@ EvdevInitButtonMapping(InputInfoPtr pInfo)
 
             pEvdev->btnmap[nbuttons++] = btn;
             map = s;
-        }
+        } while (s && *s != '\0' && nbuttons < EVDEV_MAXBUTTONS);
         free(mapping);
     }
 
@@ -2634,6 +2830,7 @@ EvdevInit(DeviceIntPtr device)
 
     pInfo = device->public.devicePrivate;
     pEvdev = pInfo->private;
+    TTRACE_BEGIN("XORG:EVDEV:INIT");
 
     /* clear all axis_map entries */
     for(i = 0; i < max(ABS_CNT,REL_CNT); i++)
@@ -2676,7 +2873,15 @@ EvdevInit(DeviceIntPtr device)
      * unregister is when the device dies. In which case we don't have to
      * unregister anyway */
     EvdevInitProperty(device);
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    if (!strncmp(pInfo->name, PROXY_DEV_NAME, sizeof(PROXY_DEV_NAME))) {
+        EvdevProxyInit(device);
+    }
+    else
+        XIRegisterPropertyHandler(device, EvdevSetProperty, NULL, NULL);
+#else //_F_PROXY_DEVICE_ENABLED_
     XIRegisterPropertyHandler(device, EvdevSetProperty, NULL, NULL);
+#endif //_F_PROXY_DEVICE_ENABLED_
     EvdevMBEmuInitProperty(device);
     Evdev3BEmuInitProperty(device);
     EvdevWheelEmuInitProperty(device);
@@ -2685,6 +2890,11 @@ EvdevInit(DeviceIntPtr device)
 #ifdef _F_EVDEV_SUPPORT_ROTARY_
     EvdevRotaryInit(device);
 #endif //_F_EVDEV_SUPPORT_ROTARY_
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+    EvdevRCInit(device);
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
+
+    TTRACE_END();
 
     return Success;
 }
@@ -2698,13 +2908,28 @@ EvdevOn(DeviceIntPtr device)
     InputInfoPtr pInfo;
     EvdevPtr pEvdev;
     int rc = Success;
+    ErrorF("[EvdevOn][id:%d] find device (%s)\n", device->id, device->name);
+    TTRACE_BEGIN("XORG:EVDEV:ON");
 
     pInfo = device->public.devicePrivate;
     pEvdev = pInfo->private;
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    /*Check if its proxy device.. in that case just set flag and return..*/
+    if(pEvdev->b_proxy_device)
+    {
+        pEvdev->flags |= EVDEV_INITIALIZED;
+        device->public.on = TRUE;
+        return Success;
+    }
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
+
     /* after PreInit fd is still open */
     rc = EvdevOpenDevice(pInfo);
-    if (rc != Success)
+    if (rc != Success) {
+        TTRACE_END();
         return rc;
+    }
 
     EvdevGrabDevice(pInfo, 1, 0);
 
@@ -2715,6 +2940,7 @@ EvdevOn(DeviceIntPtr device)
     pEvdev->flags |= EVDEV_INITIALIZED;
     device->public.on = TRUE;
 
+    TTRACE_END();
     return Success;
 }
 
@@ -2740,6 +2966,24 @@ EvdevProc(DeviceIntPtr device, int what)
         return EvdevOn(device);
 
     case DEVICE_OFF:
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    if(pEvdev->b_proxy_device)
+    {
+        if (pEvdev->flags & EVDEV_INITIALIZED)
+        {
+            pEvdev->min_maj = 0;
+            pEvdev->flags &= ~EVDEV_INITIALIZED;
+            device->public.on = FALSE;
+        }
+        if (pInfo->fd != -1)
+        {
+            xf86RemoveEnabledDevice(pInfo);
+            close(pInfo->fd);
+            pInfo->fd = -1;
+        }
+        return Success;
+    }
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
         if (pEvdev->flags & EVDEV_INITIALIZED)
         {
             EvdevMBEmuFinalize(pInfo);
@@ -2749,15 +2993,15 @@ EvdevProc(DeviceIntPtr device, int what)
         {
             EvdevGrabDevice(pInfo, 0, 1);
             xf86RemoveEnabledDevice(pInfo);
-            close(pInfo->fd);
-            pInfo->fd = -1;
+            EvdevCloseDevice(pInfo);
         }
 
 #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
         if (pEvdev->rel_move_timer)
         {
+            if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
             TimerCancel(pEvdev->rel_move_timer);
-            pEvdev->rel_move_timer = NULL;
+            if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
             pEvdev->rel_move_status = 0;
             pEvdev->rel_move_ack = 0;
             ErrorF("[%s][dev:%d] DEVICE_OFF (rel_move_status=%d, rel_move_prop_set=%d)\n", __FUNCTION__, pInfo->dev->id, pEvdev->rel_move_status,
@@ -2776,10 +3020,7 @@ EvdevProc(DeviceIntPtr device, int what)
 		EvdevSetConfineRegion(pInfo, 1, &region[0]);
 #endif /* _F_EVDEV_CONFINE_REGION_ */
 	xf86IDrvMsg(pInfo, X_INFO, "Close\n");
-        if (pInfo->fd != -1) {
-            close(pInfo->fd);
-            pInfo->fd = -1;
-        }
+        EvdevCloseDevice(pInfo);
         EvdevFreeMasks(pEvdev);
         EvdevRemoveDevice(pInfo);
 #ifdef _F_REMAP_KEYS_
@@ -2829,7 +3070,13 @@ EvdevCache(InputInfoPtr pInfo)
         goto error;
     }
 
-    strcpy(pEvdev->name, name);
+    len = strlen(name);
+    if (len < sizeof(pEvdev->name)) {
+        strncpy(pEvdev->name, name, len+1);
+    } else {
+        strncpy(pEvdev->name, name, sizeof(pEvdev->name)-1);
+        xf86DrvMsg(pInfo, X_WARNING, "Device's name(%s) is too long. Restrict name to inside of buffer size\n", pEvdev->name);
+    }
 
     len = ioctl(pInfo->fd, EVIOCGBIT(0, sizeof(bitmask)), bitmask);
     if (len < 0) {
@@ -3079,7 +3326,26 @@ EvdevProbe(InputInfoPtr pInfo)
         }
     }
 #endif
-
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+    if (EvdevBitIsSet(pEvdev->key_bitmask, BTN_EXTRA))
+    {
+        xf86IDrvMsg(pInfo, X_PROBED, "Found extra button\n");
+        if (!strncmp(pEvdev->name, AIR_TOUCH_MOUSE, strlen(AIR_TOUCH_MOUSE)))
+        {
+            xf86IDrvMsg(pInfo, X_PROBED, "... regarding smart rc\n");
+            pEvdev->flags |= EVDEV_SMART_RC;
+        }
+    }
+    if (EvdevBitIsSet(pEvdev->key_bitmask, BTN_SIDE))
+    {
+       xf86IDrvMsg(pInfo, X_PROBED, "Found extra button\n");
+       if (!strncmp(pEvdev->name, AIR_TOUCH_MOUSE, strlen(AIR_TOUCH_MOUSE)))
+       {
+          xf86IDrvMsg(pInfo, X_PROBED, "... regarding smart rc\n");
+          pEvdev->flags |= EVDEV_SMART_RC;
+       }
+    }
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
     if (ignore_abs && has_abs_axes)
     {
         xf86IDrvMsg(pInfo, X_INFO, "Absolute axes present but ignored.\n");
@@ -3182,6 +3448,9 @@ EvdevProbe(InputInfoPtr pInfo)
             xf86IDrvMsg(pInfo, X_INFO, "Configuring as touchscreen\n");
             pInfo->type_name = XI_TOUCHSCREEN;
 	} else {
+            if (!EvdevBitIsSet(pEvdev->rel_bitmask, REL_X) ||
+                !EvdevBitIsSet(pEvdev->rel_bitmask, REL_Y))
+                EvdevForceXY(pInfo, Relative);
 	    xf86IDrvMsg(pInfo, X_INFO, "Configuring as mouse\n");
 	    pInfo->type_name = XI_MOUSE;
 	}
@@ -3216,7 +3485,16 @@ EvdevProbe(InputInfoPtr pInfo)
         pEvdev->flags |= EVDEV_HALLIC;
     }
 #endif //_F_EVDEV_SUPPORT_ROTARY_
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+    if (pEvdev->flags & EVDEV_SMART_RC) {
+        xf86IDrvMsg(pInfo, X_INFO, "Configuring as smart rc\n");
+        pInfo->type_name = XI_MOUSE;
 
+        EvdevSetBit(pEvdev->rel_bitmask, REL_WHEEL);
+        EvdevSetBit(pEvdev->rel_bitmask, REL_HWHEEL);
+    }
+    pEvdev->origin_input_process = EvdevProcessEvent;
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
     if (rc)
         xf86IDrvMsg(pInfo, X_WARNING, "Don't know how to use device\n");
 
@@ -3273,21 +3551,49 @@ EvdevOpenDevice(InputInfoPtr pInfo)
         }
     }
 
+#ifdef MULTITOUCH
+    if (!pEvdev->mtdev) { /* after PreInit mtdev is still valid */
+        pEvdev->mtdev = mtdev_new_open(pInfo->fd);
+        if (!pEvdev->mtdev) {
+            xf86Msg(X_ERROR, "%s: Couldn't open mtdev device\n", pInfo->name);
+            EvdevCloseDevice(pInfo);
+            return FALSE;
+        }
+    }
+    if (pEvdev->mtdev)
+        pEvdev->cur_slot = pEvdev->mtdev->caps.slot.value;
+#endif
 
     /* Check major/minor of device node to avoid adding duplicate devices. */
     pEvdev->min_maj = EvdevGetMajorMinor(pInfo);
     if (EvdevIsDuplicate(pInfo))
     {
         xf86IDrvMsg(pInfo, X_WARNING, "device file is duplicate. Ignoring.\n");
-        close(pInfo->fd);
-#ifdef MULTITOUCH
-        mtdev_close_delete(pEvdev->mtdev);
-        pEvdev->mtdev = NULL;
-#endif
+        EvdevCloseDevice(pInfo);
         return BadMatch;
     }
 
     return Success;
+}
+
+static void
+EvdevCloseDevice(InputInfoPtr pInfo)
+{
+    EvdevPtr pEvdev = pInfo->private;
+    if (pInfo->fd >= 0)
+    {
+        close(pInfo->fd);
+        pInfo->fd = -1;
+    }
+
+#ifdef MULTITOUCH
+    if (pEvdev->mtdev)
+    {
+        mtdev_close_delete(pEvdev->mtdev);
+        pEvdev->mtdev = NULL;
+    }
+#endif
+
 }
 
 #ifdef _F_EVDEV_CONFINE_REGION_
@@ -3584,6 +3890,41 @@ EvdevSetTransformMatrix(InputInfoPtr pInfo, int num_transform, float *tmatrix)
 }
 #endif /* #ifdef _F_TOUCH_TRANSFORM_MATRIX_ */
 
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+static void
+EvdevSetRotationAngle(EvdevPtr pEvdev, int angle)
+{
+	if(pEvdev->rotation_node <= 0)
+	{
+		xf86Msg(X_INFO, "[%s] Rotation node doesn't exist. Ignored. (angle=%d)\n", __FUNCTION__, angle);
+		return;
+	}
+
+	if(pEvdev->rotation_angle != angle)
+	{
+		{
+			int nwrite = 0;
+			char buf;
+
+			buf = (char)(angle + '0');
+
+			nwrite = write(pEvdev->rotation_node, &buf, sizeof(buf));
+
+			if(nwrite <= 0)
+				xf86Msg(X_ERROR, "[%s] Failed to write angle(=%d) on rotation_node. (errno=%d)\n", __FUNCTION__, angle, errno);
+			else
+				xf86Msg(X_ERROR, "[%s] Succeed to write angle(=%d) on rotation_node.\n", __FUNCTION__, angle);
+		}
+
+		pEvdev->rotation_angle = angle;
+	}
+	else
+	{
+		xf86Msg(X_INFO, "[%s] Rotation angle has not been changed. Ignored. (angle=%d)\n", __FUNCTION__, angle);
+	}
+}
+#endif// _F_SUPPORT_ROTATION_ANGLE_
+
 static void
 EvdevUnInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 {
@@ -3599,6 +3940,8 @@ EvdevUnInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
         /* Release string allocated in EvdevOpenDevice. */
         free(pEvdev->device);
         pEvdev->device = NULL;
+        free(pEvdev);
+        pEvdev = NULL;
     }
     xf86DeleteInput(pInfo, flags);
 }
@@ -3614,17 +3957,64 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
     const char *str;
 #endif /* #ifdef _F_TOUCH_TRANSFORM_MATRIX_ */
 
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    char *type;
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
+
+#ifdef _F_BOOST_PULSE_
+    if(fd_boostpulse == NULL)
+       fd_boostpulse = open("sys/kernel/hmp/boostpulse", O_RDWR);
+#endif //_F_BOOST_PULSE_
+
     if (!(pEvdev = calloc(sizeof(EvdevRec), 1)))
     {
         xf86IDrvMsg(pInfo, X_ERROR, "Failed to allocate memory for private member of pInfo !\n");
         goto error;
     }
 
+    TTRACE_END();
+
     pInfo->private = pEvdev;
     pInfo->type_name = "UNKNOWN";
     pInfo->device_control = EvdevProc;
     pInfo->read_input = EvdevReadInput;
     pInfo->switch_mode = EvdevSwitchMode;
+#ifdef _F_EVDEV_SUPPORT_SMARTRC_
+    pEvdev->extra_input_process = NULL;
+    pEvdev->rc_state = 0;
+    pEvdev->proxy_enabled = xf86SetBoolOption(pInfo->options, "ProxyDeviceEnabled", FALSE);
+#endif //_F_EVDEV_SUPPORT_SMARTRC_
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    /* If Type == ProxyDev, this is a proxy device */
+    type = xf86CheckStrOption(pInfo->options, "Type", NULL);
+
+    xf86Msg(X_INFO, "%s: Evdev Type %s found\n", pInfo->name, type);
+
+    if (type != NULL && strcmp(type, OPT_TYPE_VAL) == 0)
+    {
+        EvdevPtr pCreatorEvdev;
+        free(type);
+        if (!pCreatorInfo){
+            return Success;
+        }
+        pCreatorEvdev = pCreatorInfo->private;
+        xf86Msg(X_INFO, "%s: Evdev proxy device found\n", pInfo->name);
+        memcpy(pEvdev, pCreatorEvdev, sizeof(EvdevRec));
+        pInfo->read_input = EvdevProxydevReadInput;
+        pInfo->type_name = pCreatorInfo->type_name;
+        pEvdev->b_proxy_device = TRUE;
+        pEvdev->proxy_device = NULL;
+        return Success;
+    }
+    else
+    {
+        free(type);
+        pEvdev->b_proxy_device = FALSE;
+        pEvdev->proxy_device = NULL;
+    }
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
+
 #ifdef _F_EVDEV_SUPPORT_ROTARY_
     pEvdev->extra_rel_post_hallic= NULL;
     pEvdev->extra_rel_post_ofm= NULL;
@@ -3637,6 +4027,9 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 #ifdef MULTITOUCH
     pEvdev->cur_slot = -1;
 #endif
+#ifdef MULTI_PASSIVE_GRAB_
+    pEvdev->activatedkeylist = NULL;
+#endif //MULTI_PASSIVE_GRAB_
 
     /*
      * We initialize pEvdev->in_proximity to 1 so that device that doesn't use
@@ -3728,6 +4121,7 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 	else
 	{
 		xf86Msg(X_ERROR, "%s: Couldn't open mtdev device\n", pInfo->name);
+		TTRACE_END();
 		return FALSE;
 	}
     }
@@ -3788,6 +4182,21 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
 
 #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
     pEvdev->rel_move_timer = NULL;
+    if (pEvdev->flags & EVDEV_RELATIVE_EVENTS)
+    {
+#ifdef _F_PROXY_DEVICE_ENABLED_
+        if (!pEvdev->b_proxy_device)
+        {
+#endif //_F_PROXY_DEVICE_ENABLED_
+        if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+        pEvdev->rel_move_timer = TimerSet(pEvdev->rel_move_timer, 0, EVDEV_RMS_TIMEOUT, EvdevRelativeMoveTimer, pInfo);
+        if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+        TimerCancel(pEvdev->rel_move_timer);
+        ErrorF("[EvdevPreinit] Device: %s has relative events create RMS timer(%p)\n", pInfo->name, pEvdev->rel_move_timer);
+#ifdef _F_PROXY_DEVICE_ENABLED_
+        }
+#endif //_F_PROXY_DEVICE_ENABLED_
+    }
     pEvdev->rel_move_prop_set = 0;
     pEvdev->rel_move_status = 0;
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
@@ -3827,11 +4236,31 @@ EvdevPreInit(InputDriverPtr drv, InputInfoPtr pInfo, int flags)
     pEvdev->keycode_btnPlay = xf86SetIntOption(pInfo->options, "GamePad_ButtonPlay", 0);
 #endif//_F_EVDEV_SUPPORT_GAMEPAD
 
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+    pEvdev->rotation_angle = xf86SetIntOption(pInfo->options, "RotationAngle", 0);
+
+    str = xf86CheckStrOption(pInfo->options, "RotationNode", NULL);
+    if (str)
+    {
+        do {
+            pEvdev->rotation_node = open(str, O_WRONLY, 0);
+        } while (pEvdev->rotation_node < 0 && errno == EINTR);
+    }
+    else xf86Msg(X_INFO, "%s: No rotation node exists..\n", pInfo->name);
+
+    if (pEvdev->rotation_node < 0) {
+        xf86Msg(X_ERROR, "Unable to open evdevmultitouch rotation_node\"%s\".\n", str);
+        xf86Msg(X_ERROR, "Input rotation will be done inside evdevmultitouch driver.\n");
+        pEvdev->rotation_node = 0;
+    }
+#endif// _F_SUPPORT_ROTATION_ANGLE_
+
+    TTRACE_END();
     return Success;
 
 error:
-    if ((pInfo) && (pInfo->fd >= 0))
-        close(pInfo->fd);
+    EvdevCloseDevice(pInfo);
+    TTRACE_END();
     return rc;
 }
 
@@ -4184,9 +4613,14 @@ EvdevInitProperty(DeviceIntPtr dev)
 #ifdef _F_EVDEV_CONFINE_REGION_
     int region[6] = { 0, };
 #endif /* _F_EVDEV_CONFINE_REGION_ */
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    int slave_proxy;
+#endif /* _F_PROXY_DEVICE_ENABLED_ */
 
     CARD32       product[2];
-
+#ifdef _F_PICTURE_OFF_MODE_ENABLE_
+    atomPictureOffMode = MakeAtom(XI_PROP_PICTURE_OFF_MODE,strlen(XI_PROP_PICTURE_OFF_MODE), TRUE);
+#endif //_F_PICTURE_OFF_MODE_ENABLE_
     prop_product_id = MakeAtom(XI_PROP_PRODUCT_ID, strlen(XI_PROP_PRODUCT_ID), TRUE);
     product[0] = pEvdev->id_vendor;
     product[1] = pEvdev->id_product;
@@ -4201,30 +4635,31 @@ EvdevInitProperty(DeviceIntPtr dev)
     device_node = strdup(pEvdev->device);
     prop_device = MakeAtom(XI_PROP_DEVICE_NODE,
                            strlen(XI_PROP_DEVICE_NODE), TRUE);
-    rc = XIChangeDeviceProperty(dev, prop_device, XA_STRING, 8,
-                                PropModeReplace,
-                                (device_node?strlen(device_node):0), device_node,
-                                FALSE);
-    free(device_node);
+    if (device_node)
+    {
+        rc = XIChangeDeviceProperty(dev, prop_device, XA_STRING, 8,
+                                    PropModeReplace,
+                                    strlen(device_node), device_node,
+                                    FALSE);
+        free(device_node);
 
-    if (rc != Success)
-        return;
-
-    XISetDevicePropertyDeletable(dev, prop_device, FALSE);
+        if (rc == Success)
+            XISetDevicePropertyDeletable(dev, prop_device, FALSE);
+    }
 
 #ifdef _F_ENABLE_DEVICE_TYPE_PROP_
     /* Device node property */
     device_type = strdup(pInfo->type_name);
     prop_device_type = MakeAtom(XI_PROP_DEVICE_TYPE,
                            strlen(XI_PROP_DEVICE_TYPE), TRUE);
-    rc = XIChangeDeviceProperty(dev, prop_device_type, XA_STRING, 8,
-                                PropModeReplace,
-                                (device_type?strlen(device_type):0), device_type,
-                                FALSE);
-    free(device_type);
-
-    if (rc != Success)
-        return;
+    if (device_type)
+    {
+        rc = XIChangeDeviceProperty(dev, prop_device_type, XA_STRING, 8,
+                                    PropModeReplace,
+                                    strlen(device_type), device_type,
+                                    FALSE);
+        free(device_type);
+    }
 #endif /* #ifdef _F_ENABLE_DEVICE_TYPE_PROP_ */
 
 #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
@@ -4235,7 +4670,10 @@ EvdevInitProperty(DeviceIntPtr dev)
                                         strlen(XI_PROP_REL_MOVE_STATUS), TRUE);
     prop_relative_move_ack = MakeAtom(XI_PROP_REL_MOVE_ACK,
                                         strlen(XI_PROP_REL_MOVE_ACK), TRUE);
-
+#ifdef _F_BLOCK_MOTION_DEVICE_
+    prop_block_motion_status = MakeAtom(XI_PROP_BLOCK_MOTION_DEVICE,
+                                        strlen(XI_PROP_BLOCK_MOTION_DEVICE), TRUE);
+#endif //_F_BLOCK_MOTION_DEVICE_
     ErrorF("[%s] prop_relative_move_status = %d, prop_relative_move_ack = %d\n", __FUNCTION__, prop_relative_move_status, prop_relative_move_ack);
 #endif /* #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_ */
 
@@ -4336,7 +4774,8 @@ EvdevInitProperty(DeviceIntPtr dev)
         if ((pEvdev->num_vals > 0) && (prop_axis_label = XIGetKnownProperty(AXIS_LABEL_PROP)))
         {
             int mode;
-            Atom atoms[pEvdev->num_vals];
+            int num_axes = pEvdev->num_vals + pEvdev->num_mt_vals;
+            Atom atoms[num_axes];
 
             if (pEvdev->flags & EVDEV_ABSOLUTE_EVENTS)
                 mode = Absolute;
@@ -4347,9 +4786,9 @@ EvdevInitProperty(DeviceIntPtr dev)
                 mode = Absolute;
             }
 
-            EvdevInitAxesLabels(pEvdev, mode, pEvdev->num_vals, atoms);
+            EvdevInitAxesLabels(pEvdev, mode, num_axes, atoms);
             XIChangeDeviceProperty(dev, prop_axis_label, XA_ATOM, 32,
-                                   PropModeReplace, pEvdev->num_vals, atoms, FALSE);
+                                   PropModeReplace, num_axes, atoms, FALSE);
             XISetDevicePropertyDeletable(dev, prop_axis_label, FALSE);
         }
         /* Button labelling */
@@ -4361,7 +4800,51 @@ EvdevInitProperty(DeviceIntPtr dev)
                                    PropModeReplace, pEvdev->num_buttons, atoms, FALSE);
             XISetDevicePropertyDeletable(dev, prop_btn_label, FALSE);
         }
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+        if (pEvdev->flags & EVDEV_ABSOLUTE_EVENTS) {
+            int rotation_angle;
+            prop_rotation_angle = MakeAtom(EVDEV_PROP_ROTATION_ANGLE,
+                                    strlen(EVDEV_PROP_ROTATION_ANGLE), TRUE);
+
+            rotation_angle = pEvdev->rotation_angle;
+            rc = XIChangeDeviceProperty(dev, prop_rotation_angle, XA_INTEGER, 8,
+                                    PropModeReplace, 1, &rotation_angle, TRUE);
+            if (rc != Success)
+                return;
+
+            XISetDevicePropertyDeletable(dev, prop_rotation_angle, FALSE);
+
+            int rotation_node;
+            prop_rotation_node = MakeAtom(EVDEV_PROP_ROTATION_NODE,
+                                    strlen(EVDEV_PROP_ROTATION_NODE), TRUE);
+
+            rotation_node = pEvdev->rotation_node;
+            rc = XIChangeDeviceProperty(dev, prop_rotation_node, XA_INTEGER, 32,
+                                    PropModeReplace, 1, &rotation_node, FALSE);
+            if (rc != Success)
+                return;
+
+            XISetDevicePropertyDeletable(dev, prop_rotation_node, FALSE);
+        }
+#endif //_F_SUPPORT_ROTATION_ANGLE_
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+        slave_proxy = 0;
+        prop_use_proxy_slave_device = MakeAtom(XI_PROP_USE_PROXY_SLAVE_DEVICE, strlen(XI_PROP_USE_PROXY_SLAVE_DEVICE), TRUE);
+        XIChangeDeviceProperty(dev, prop_use_proxy_slave_device, XA_INTEGER, 8,
+                               PropModeReplace, 1, &slave_proxy, FALSE);
+        XISetDevicePropertyDeletable(dev, prop_use_proxy_slave_device, FALSE);
+        pEvdev->proxy_device = NULL;
+#endif // _F_PROXY_DEVICE_ENABLED_
     }
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    slave_proxy = 0;
+    prop_use_proxy_slave_device = MakeAtom(XI_PROP_USE_PROXY_SLAVE_DEVICE, strlen(XI_PROP_USE_PROXY_SLAVE_DEVICE), TRUE);
+    XIChangeDeviceProperty(dev, prop_use_proxy_slave_device, XA_INTEGER, 8,
+                           PropModeReplace, 1, &slave_proxy, FALSE);
+    XISetDevicePropertyDeletable(dev, prop_use_proxy_slave_device, FALSE);
+    pEvdev->proxy_device = NULL;
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
 }
 
 static int
@@ -4436,16 +4919,334 @@ EvdevSetProperty(DeviceIntPtr dev, Atom atom, XIPropertyValuePtr val,
 #ifdef _F_ENABLE_REL_MOVE_STATUS_PROP_
     else if (atom == prop_relative_move_ack)
     {
+        int data;
+
         if (val->format != 8 || val->type != XA_INTEGER)
             return BadMatch;
         if (val->size != 1)
             return BadMatch;
 
-        if (!checkonly)
-            pEvdev->rel_move_ack = 1;
+        if (!checkonly) {
+            data = *((CARD8*)val->data);
+            pEvdev->rel_move_ack = data;
+        }
+
+        if ((pEvdev->rel_move_ack == 2) || (pEvdev->rel_move_ack == 3))
+        {
+            if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+            TimerCancel(pEvdev->rel_move_timer);
+            if (pEvdev->rel_move_timer == NULL) ErrorF("[%s:%d] pEvdev->rel_move_timer: %p\n", __FUNCTION__, __LINE__, pEvdev->rel_move_timer);
+            pEvdev->rel_move_status = 0;
+        }
     }
 #endif /* _F_ENABLE_REL_MOVE_STATUS_PROP_ */
+#ifdef _F_GESTURE_EXTENSION_
+    else if (atom == XIGetKnownProperty(XI_PROP_ENABLED))
+    {
+        if (val->format != 8 || val->type != XA_INTEGER)
+            return BadMatch;
 
+        if (val->size != 1)
+            return BadMatch;
+
+        if (!checkonly && strcasestr(dev->name, "touchscreen"))
+        {
+            DeviceIntPtr device;
+            for (device = inputInfo.devices; device; device = device->next)
+            {
+                if(!strncmp(device->name, GESTURE_DEV_NAME, sizeof(GESTURE_DEV_NAME)-1))
+                {
+                    InputInfoPtr gestureInfo = device->public.devicePrivate;
+                    ErrorF("[EvdevSetProperty][id:%d] find device (%s)\n", device->id, device->name);
+                    gestureInfo->device_control(device, DEVICE_READY);
+                    break;
+                }
+            }
+        }
+    }
+#endif //_F_GESTURE_EXTENSION_
+
+#ifdef _F_SUPPORT_ROTATION_ANGLE_
+    else if (atom == prop_rotation_angle)
+    {
+        int data;
+        char cdata;
+        if (val->format != 8 || val->type != XA_INTEGER || val->size != 1)
+            return BadMatch;
+
+        if (!checkonly)
+        {
+            cdata = *((char*)val->data);
+            data = (int)cdata;
+
+            EvdevSetRotationAngle(pEvdev, data);
+        }
+    }
+#endif //_F_SUPPORT_ROTATION_ANGLE_
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+    else if (atom == prop_use_proxy_slave_device)
+    {
+        int data;
+
+        if (val->format != 8 || val->type != XA_INTEGER)
+            return BadMatch;
+        if (val->size != 1)
+            return BadMatch;
+
+        if (!pEvdev->proxy_enabled)
+            return Success;
+
+        if (!checkonly) {
+            data = *((CARD8*)val->data);
+            EvdevSetProxyDevice(dev,data);
+        }
+    }
+#endif // #ifdef _F_PROXY_DEVICE_ENABLED_
+#ifdef _F_BLOCK_MOTION_DEVICE_
+    else if (atom == prop_block_motion_status )
+    {
+        int data;
+
+        if (!checkonly) {
+            data = *((CARD8*)val->data);
+            block_motion_device = data;
+        }
+    }
+    else if ((atom == atomPictureOffMode))
+    {
+        int data;
+        data = *((CARD8*)val->data);
+        pictureOffMode  = data;
+    }
+#endif //_F_BLOCK_MOTION_DEVICE_
 
     return Success;
 }
+
+#ifdef _F_PROXY_DEVICE_ENABLED_
+
+static int EvdevSetProxyDevice(DeviceIntPtr dev, int val)
+{
+    InputInfoPtr pInfo  = dev->public.devicePrivate;
+    EvdevPtr     pEvdev = pInfo->private;
+    if(0 == val) {
+    	pEvdev->proxy_device = NULL;
+    } else {
+    	if(NULL == pProxyDeviceInfo) {
+    		pProxyDeviceInfo = EvdevCreateProxyDevice(pInfo);
+    	}
+    	pEvdev->proxy_device = pProxyDeviceInfo;
+    }
+    return 1;
+}
+
+/* Duplicate xf86 options and convert them to InputOption */
+static InputOption *EvdevOptionDupConvert(pointer original)
+{
+    InputOption *iopts = NULL, *new;
+    InputInfoRec dummy;
+
+    memset(&dummy, 0, sizeof(dummy));
+    dummy.options = xf86OptionListDuplicate(original);
+
+    while(dummy.options)
+    {
+        if (xf86NameCmp(xf86OptionName(dummy.options), "config_info") == 0) {
+            /*should not copy config_info as its used by hotplugging layer*/
+            dummy.options = xf86NextOption(dummy.options);
+            continue;
+        }
+        new = calloc(1, sizeof(struct _InputOption));
+        if (!new) return iopts;
+
+        new->opt_name = xf86OptionName(dummy.options);
+        new->opt_val = xf86OptionValue(dummy.options);
+        new->list.next = iopts;
+        iopts = new;
+        dummy.options = xf86NextOption(dummy.options);
+    }
+
+    return iopts;
+}
+
+static void EvdevFreeInputOpts(InputOption* opts)
+{
+    InputOption *tmp = opts;
+    while(opts)
+    {
+        tmp = opts->list.next;
+        free(opts->opt_name);
+        free(opts->opt_val);
+        free(opts);
+        opts = tmp;
+    }
+}
+
+static void EvdevReplaceOption(InputOption *opts,const char* key, char * value)
+{
+    while(opts)
+    {
+        if (xf86NameCmp(opts->opt_name, key) == 0)
+        {
+            free(opts->opt_val);
+            opts->opt_val = strdup(value);
+        }
+        opts = opts->list.next;
+    }
+}
+
+
+/*
+* @return 0 if successful, 1 if failure pProxyDeviceInfo
+*/
+static InputInfoPtr
+EvdevCreateProxyDevice(InputInfoPtr pInfo) {
+    InputInfoPtr pProxyDev;
+
+    DeviceIntPtr dev; /* dummy */
+    InputOption *input_options = NULL;
+    char* name;
+    char str_OPT_TYPE_VAL[sizeof(OPT_TYPE_VAL)];
+    char str_dev_null[sizeof("/dev/null")];
+
+    pInfo->options = xf86AddNewOption(pInfo->options, "Type", "core");
+    pInfo->options = xf86AddNewOption(pInfo->options, "SendCoreEvents", "on");
+
+    /* Create new device */
+    input_options = EvdevOptionDupConvert(pInfo->options);
+    snprintf(str_OPT_TYPE_VAL, sizeof(OPT_TYPE_VAL), OPT_TYPE_VAL);
+    EvdevReplaceOption(input_options, "type",str_OPT_TYPE_VAL);
+
+    name = malloc( (strlen(PROXY_DEV_NAME) + 1)*sizeof(char));
+
+    if( !name )
+    {
+        EvdevFreeInputOpts(input_options);
+        xf86DrvMsg(-1, X_ERROR, "[X11][%s] Failed to allocate memory !\n", __FUNCTION__);
+        return NULL;
+    }
+
+    snprintf(name, strlen(PROXY_DEV_NAME)+1, PROXY_DEV_NAME);
+    snprintf(str_dev_null, sizeof("/dev/null"), "/dev/null");
+    EvdevReplaceOption(input_options, "name",name);
+    EvdevReplaceOption(input_options, "Device",str_dev_null);
+    EvdevReplaceOption(input_options, "Path",str_dev_null);
+
+    pCreatorInfo = pInfo;
+    NewInputDeviceRequest(input_options, NULL, &dev);
+    pProxyDev = dev->public.devicePrivate;
+    pCreatorInfo = NULL;
+
+    EvdevFreeInputOpts(input_options);
+
+    free(name);
+    return pProxyDev;
+}
+
+static void
+EvdevProxydevReadInput(InputInfoPtr pInfo)
+{
+
+}
+
+static void
+MakeClassesChangedEvent(DeviceChangedEvent *dce,
+                          DeviceIntPtr master, DeviceIntPtr slave, int flags)
+{
+    int i;
+    CARD32 ms = GetTimeInMillis();
+
+    memset(dce, 0, sizeof(DeviceChangedEvent));
+    dce->deviceid = slave->id;
+    dce->masterid = master ? master->id : 0;
+    dce->header = ET_Internal;
+    dce->length = sizeof(DeviceChangedEvent);
+    dce->type = ET_DeviceChanged;
+    dce->time = ms;
+    dce->flags = flags;
+    dce->sourceid = slave->id;
+
+    if (slave->button) {
+        dce->buttons.num_buttons = slave->button->numButtons;
+        for (i = 0; i < dce->buttons.num_buttons; i++)
+            dce->buttons.names[i] = slave->button->labels[i];
+    }
+    if (slave->valuator) {
+        dce->num_valuators = slave->valuator->numAxes;
+        for (i = 0; i < dce->num_valuators; i++) {
+            dce->valuators[i].min = slave->valuator->axes[i].min_value;
+            dce->valuators[i].max = slave->valuator->axes[i].max_value;
+            dce->valuators[i].resolution = slave->valuator->axes[i].resolution;
+            dce->valuators[i].mode = slave->valuator->axes[i].mode;
+            dce->valuators[i].name = slave->valuator->axes[i].label;
+            dce->valuators[i].scroll = slave->valuator->axes[i].scroll;
+        }
+    }
+    if (slave->key) {
+        dce->keys.min_keycode = slave->key->xkbInfo->desc->min_key_code;
+        dce->keys.max_keycode = slave->key->xkbInfo->desc->max_key_code;
+    }
+}
+#ifndef _F_PROXY_DEVICE_CHANGE_SOURCE_ID
+static void EvdevPostDevChangeEvent(InputInfoPtr pInfo)
+{
+    DeviceChangedEvent event;
+    DeviceIntPtr master = inputInfo.keyboard;
+    DeviceIntPtr dummyDevice = pInfo->dev;
+    int flag;
+
+    if(master->last.slave == dummyDevice) {
+        return;
+	}
+
+    flag = DEVCHANGE_KEYBOARD_EVENT | DEVCHANGE_SLAVE_SWITCH;
+
+    MakeClassesChangedEvent(&event,master,dummyDevice,flag);
+
+    master->last.slave = dummyDevice;
+
+    mieqEnqueue (dummyDevice, (InternalEvent*)&event);
+}
+#else /* _F_PROXY_DEVICE_CHANGE_SOURCE_ID */
+static void EvdevCheckDevChange(EvdevPtr pEvdev, int deviceid)
+{
+    DeviceChangedEvent event;
+    DeviceIntPtr master;
+    DeviceIntPtr dummyDevice;
+    int flag;
+    if(!pProxyDeviceInfo || !pEvdev) return;
+
+    //if proxydevice is created but is not used by the current device,
+    //reset the sourcedid of keyclass of the proxy device to its own id
+    //and return..
+    if(pProxyDeviceInfo && !pEvdev->proxy_device) {
+        pProxyDeviceInfo->dev->key->sourceid = pProxyDeviceInfo->dev->id;
+        return;
+    }
+
+    master = inputInfo.keyboard;
+    dummyDevice = pProxyDeviceInfo->dev;
+
+    //if nothing has changed.. return
+    //the first check is for differentiating between attached slaves and the second
+    //differentiates between the floating slaves represented by the proxy device
+    if(master->last.slave == dummyDevice &&
+        pProxyDeviceInfo->dev->key->sourceid == deviceid) {
+        return;
+    }
+
+    flag = DEVCHANGE_KEYBOARD_EVENT | DEVCHANGE_SLAVE_SWITCH;
+
+    MakeClassesChangedEvent(&event,master,dummyDevice,flag);
+
+    master->last.slave = dummyDevice;
+
+    //setting the source id of the device key class to the id of the actual slave it represents.
+    //clients can query the same to know which device the actual events are coming from
+    pProxyDeviceInfo->dev->key->sourceid = deviceid;
+
+    mieqEnqueue (dummyDevice, (InternalEvent*)&event);
+}
+#endif /* _F_PROXY_DEVICE_CHANGE_SOURCE_ID */
+#endif /* #ifdef _F_PROXY_DEVICE_ENABLED_ */
